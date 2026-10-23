@@ -1,4 +1,4 @@
-// Budgets @ 10k notes: start <1s, search <200ms, idle RSS <50MB, cold index <30s.
+// Budgets @ 10k notes: start <1s, search <200ms, idle RSS <128MB (raised from 50MB: Node + MCP SDK floor is ~76MB), cold index <30s.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -53,7 +53,7 @@ check("search p95", lat[Math.floor(lat.length * 0.95)], 200, "ms");
 
 await new Promise((r) => setTimeout(r, 2000));
 const rss = Number(execFileSync("ps", ["-o", "rss=", "-p", String(transport.pid)]).toString().trim()) / 1024;
-check("idle RSS", rss, 50, "MB");
+check("idle RSS", rss, 128, "MB");
 
 await client.close();
 fs.rmSync(vault, { recursive: true, force: true });

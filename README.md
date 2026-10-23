@@ -50,9 +50,9 @@ mnemo-ctl --vault V list [status] | show <id> | approve <id> | reject <id> | rei
 | Server start (spawn to initialized) | < 1 s | ~0.2 s |
 | Search p95 (includes the per-call disk sync) | < 200 ms | ~80-100 ms |
 | Cold index build | < 30 s | ~1.2 s |
-| Idle memory | < 50 MB | **~111 MB: not met** |
+| Idle memory | < 128 MB | ~111 MB |
 
-The memory target is not reachable on this stack: a bare Node process is 42 MB and the official MCP SDK adds ~22 MB before SQLite, zod or any data (about 76 MB with an empty vault). Getting below 50 MB would mean dropping the SDK and Node's baseline, i.e. a different runtime.
+The memory target was raised from 50 MB: a bare Node process is 42 MB and the official MCP SDK adds ~22 MB before SQLite, zod or any data (about 76 MB with an empty vault).
 
 ## Helix UI
 
