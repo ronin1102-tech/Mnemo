@@ -1,16 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "./expect.js";
 import { lineDiff } from "../src/diff.js";
 import { extractLinks, maskCode, parseFrontmatter, rewriteLinks } from "../src/links.js";
 import { ProposalStore } from "../src/proposals.js";
 import { Vault } from "../src/vault.js";
 import { tmpVault } from "./helpers.js";
 
-const cli = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "dist", "cli.js");
+const cli = path.resolve("dist", "cli.js"); // npm runs tests from the package directory
 
 describe("F6: oversized requests are refused cleanly, never kill the server (real stdio)", () => {
   it("survives an 11 MiB request and a >10 MB note, and still accepts a big valid note", async () => {

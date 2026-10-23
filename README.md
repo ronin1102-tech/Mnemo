@@ -13,6 +13,8 @@ A local-first second brain. Notes are plain `.md` files in a folder you own; an 
 npm run install:all && npm run build && npm test     # Node 20 LTS (see .nvmrc); step-by-step: docs/INSTALL.md
 ```
 
+Toolchain is pinned for the macOS 10.15 floor: Node 20, TypeScript 5.9, esbuild 0.23.1, better-sqlite3 12.9.0, tests on Node's built-in runner. `test/toolchain.test.ts` guards it.
+
 ## MCP server
 
 ```

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "./expect";
 import { ROW_GAP, assignStrands, layoutGraph, layoutHelix, radiusAt, strandX, visibleRange, withinHops } from "../src/layout";
 import type { GraphData } from "../src/types";
 

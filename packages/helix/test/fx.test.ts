@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "./expect";
 import { QualityGovernor, TIERS, hash, quadAt, wrap } from "../src/fx";
 
 describe("quality governor", () => {

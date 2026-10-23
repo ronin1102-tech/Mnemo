@@ -23,13 +23,17 @@ npm --version
 ```
 
 ## 2. Get the code
+> **Download the right branch.** The `main` branch is older and will not install on Catalina. Use branch `claude/new-session-bzyycu`. If you already have a `Mnemo-main` folder, delete it and start again from this step.
+
 Either **git**:
 ```
 git clone https://github.com/ronin1102-tech/Mnemo.git
 cd Mnemo
 git checkout claude/new-session-bzyycu
 ```
-On Catalina, the first `git` use may ask to install Apple's command-line tools: accept, or skip git entirely and use **GitHub > Mnemo > branch `claude/new-session-bzyycu` > Code > Download ZIP**, unzip it, and `cd` into the folder.
+On Catalina, the first `git` use may ask to install Apple's command-line tools: accept, or skip git entirely: download
+`https://github.com/ronin1102-tech/Mnemo/archive/refs/heads/claude/new-session-bzyycu.zip`
+(or on GitHub: switch the branch menu to `claude/new-session-bzyycu`, then **Code > Download ZIP**). It unzips to a folder named `Mnemo-claude-new-session-bzyycu`; `cd` into it.
 
 ## 3. Install, build, test
 From the `Mnemo` folder:
@@ -39,9 +43,11 @@ npm run build
 npm test
 ```
 Expect:
-- install: two "added N packages" lines, no `ERR`. It downloads a ready-made SQLite binary for your system; nothing is compiled.
+- install: two "added N packages" lines, **no `EBADENGINE` warnings**, no `ERR`. It downloads a ready-made SQLite binary for your system; nothing is compiled.
 - build: `built dist/`
-- test: **52 passed** (server) and **27 passed** (UI).
+- test: two summaries from Node's built-in test runner, `ℹ pass 59` / `ℹ fail 0` (server) and `ℹ pass 27` / `ℹ fail 0` (UI).
+
+Every native program this installs on a Mac has been checked to run on macOS 10.15: esbuild 0.23.1 (needs 10.13+) and better-sqlite3 12.9.0 (10.7+). A test fails the build if an upgrade ever brings back one that needs macOS 11+.
 
 ## 4. See the Helix UI (demo data)
 Open `packages/helix/dist/index.html` in your browser:
@@ -89,7 +95,9 @@ Then:
 | Symptom | What to do |
 |---|---|
 | `node --version` isn't v20 | Install Node 20 (step 1); with nvm, `nvm use 20`. |
-| `npm ERR! engine` or "Unsupported engine" | You're on an older Node. Use 20. |
+| `EBADENGINE` / "Unsupported engine" warnings mentioning vitest 5 or better-sqlite3 13 | You have the old `main` code. Download branch `claude/new-session-bzyycu` (step 2) into a fresh folder. |
+| `dyld: Symbol not found` ... "built for Mac OS X 12.0" (esbuild) | Same cause: old `main` code. The current branch pins tools that run on 10.15. |
+| `npm ERR! engine` with a different package | Note it in your report; check `node --version` is v20. |
 | Install prints `gyp`, `make` or "compiling" lines, or fails in `better-sqlite3` | The ready-made binary couldn't download (network or unusual CPU), so it tried to compile. On macOS run `xcode-select --install`, then `npm run install:all` again. Copy the full error into your report either way. |
 | Page is blank | Safari: Develop > Show Web Inspector > Console (enable the Develop menu in Safari > Preferences > Advanced). Copy the red errors. |
 | Header still says "Demo vault" after exporting | Check `packages/helix/dist/graph.js` exists (the `--out` path), then reload the page. |
@@ -100,7 +108,7 @@ Then:
 ## 8. What to send back
 ```
 Machine: model/year, OS + version, browser + version, node --version
-Step 3: install OK? (prebuilt or compiled)  tests: __ / 52 server, __ / 27 UI
+Step 3: install OK? (prebuilt or compiled)  tests: pass __ / 59 server, pass __ / 27 UI
 Step 4: renders? Effects tier it settled on: ____  smooth / laggy
 Step 5: vault size __ notes; export OK? looks right?
 Step 6 (if done): client used; proposal created; approve landed; gold ring seen?

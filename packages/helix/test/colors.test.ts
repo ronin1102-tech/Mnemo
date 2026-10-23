@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "./expect";
 import { COLORS } from "../src/colors";
 
-const root = path.resolve(__dirname, "..");
+const root = process.cwd(); // npm runs tests from the package directory
 const read = (f: string) => fs.readFileSync(path.join(root, f), "utf8");
 const srcFiles = () => fs.readdirSync(path.join(root, "src")).filter((f) => f.endsWith(".ts") && f !== "colors.ts");
 

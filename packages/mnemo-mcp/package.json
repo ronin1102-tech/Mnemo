@@ -11,7 +11,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "vitest run",
+    "test": "tsc -p tsconfig.json && tsc -p tsconfig.test.json && node scripts/run-tests.mjs build-test/test",
     "start": "node dist/cli.js serve",
     "bench": "npm run build && node scripts/bench.mjs"
   },
@@ -27,7 +27,6 @@
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^20.19.0",
-    "typescript": "^7.0.2",
-    "vitest": "^3.2.4"
+    "typescript": "~5.9.3"
   }
 }

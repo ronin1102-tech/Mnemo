@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "./expect.js";
 import { PROPOSAL_TTL_MS, ProposalStore } from "../src/proposals.js";
 import { Vault } from "../src/vault.js";
 import { tmpVault } from "./helpers.js";
