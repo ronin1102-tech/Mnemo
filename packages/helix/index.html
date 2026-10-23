@@ -6,24 +6,39 @@
 <title>Mnemo Helix</title>
 <link rel="stylesheet" href="style.css">
 </head>
-<body>
-<header>
-  <h1>Mnemo</h1>
-  <nav aria-label="View">
+<body data-mode="emblem">
+<header class="bar">
+  <div class="brand">
+    <svg class="brandmark" viewBox="0 0 24 32" aria-hidden="true">
+      <path d="M7 2 C17 8, 17 12, 7 16 C-3 20, -3 24, 7 30" fill="none" stroke="#8fbcff" stroke-width="2" stroke-linecap="round"/>
+      <path d="M17 2 C7 8, 7 12, 17 16 C27 20, 27 24, 17 30" fill="none" stroke="#5e8fdc" stroke-width="2" stroke-linecap="round"/>
+      <path d="M9 6 H15 M9 26 H15 M10 11 H14 M10 21 H14" stroke="#a9c4f0" stroke-width="1" opacity=".6"/>
+    </svg>
+    <span class="wordmark">MNEMO</span>
+  </div>
+  <nav class="seg" aria-label="View">
+    <span class="seg-ind" id="seg-ind" aria-hidden="true"></span>
     <button type="button" data-mode="emblem" aria-pressed="true">Emblem</button>
     <button type="button" data-mode="helix" aria-pressed="false">Helix</button>
     <button type="button" data-mode="graph" aria-pressed="false">Graph</button>
   </nav>
-  <span id="source"></span>
+  <span id="source" class="source"></span>
+  <button type="button" id="fx" class="chip" aria-pressed="true"><span class="fx-icon" aria-hidden="true">✦</span><span id="fx-label">Effects</span></button>
 </header>
 <main>
-  <canvas id="stage" tabindex="0" role="application" aria-label="Mnemo emblem. Press Enter to open the helix."></canvas>
-  <aside>
-    <section aria-labelledby="list-h">
-      <h2 id="list-h">Strand list <small>newest first</small></h2>
-      <ul id="strand-list"></ul>
-    </section>
-    <section id="detail" aria-live="off" hidden></section>
+  <section class="stage-wrap">
+    <canvas id="stage" tabindex="0" role="application" aria-label="Mnemo emblem. Press Enter to open the helix."></canvas>
+    <div id="tip" class="tip" hidden></div>
+    <section id="detail" class="card" aria-live="off" hidden></section>
+    <p id="hint" class="hint">Scroll to travel through time · click a note to focus · Esc to step back</p>
+  </section>
+  <aside class="panel" aria-labelledby="list-h">
+    <div class="panel-head">
+      <h2 id="list-h">Strand</h2>
+      <span id="count" class="count"></span>
+    </div>
+    <p class="panel-sub">Newest first · the same notes as the helix</p>
+    <ul id="strand-list"></ul>
   </aside>
 </main>
 <div id="live" class="sr" role="status" aria-live="polite"></div>

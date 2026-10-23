@@ -102,6 +102,15 @@ Open `packages/helix/dist/index.html` in **Safari** (File > Open, or `open -a Sa
 | Text is crisp on a Retina and on a non-Retina display (if both available) | |
 | Load time with the 10k-note `graph.js`: page usable in how many seconds? (Linux Chromium reference: ~1.5 s; Graph button ~0.25 s) | |
 
+### Effects tier (the governor)
+The header shows `Effects: Auto · <tier>`. Open the helix, select a note, leave it 10 s, then record the tier it settled on (High / Medium / Low / Static). Then pin each tier with `index.html?fx=3`, `?fx=2`, `?fx=1`, `?fx=0` and run the fps snippet below for each. Linux reference (CPU-throttled Chromium as a stand-in for old hardware): 1× settles on High at 60 fps; 4× settles on Low at ~51 fps; 8× falls to Static.
+| Check | Pass |
+|---|---|
+| Tier the governor settled on (no pinning) | |
+| fps at `?fx=3` / `?fx=2` / `?fx=1` | |
+| The Effects button toggles Off and back; the choice survives a reload | |
+| With Reduce Motion on, the button reads "Reduced motion" and nothing animates | |
+
 ### Frame rate (the 60 fps claim)
 In Safari: Develop > Show Web Inspector > Console. Open the Helix view first (click the canvas), then paste:
 ```js
