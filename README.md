@@ -70,7 +70,7 @@ Without `graph.js` it shows demo data. Palette is the mark's: deep navy, water-b
 - **Helix mode:** time is the vertical axis, newest at the top, oldest at the bottom, where the coil narrows into **the spring** (the pool; click it to clear focus and return to the newest end). Position is measured from the spring, so adding notes only extends the coil upward and never moves existing nodes. A note's time is frontmatter `created` when present, else modified time. Rows are spaced by rank, not clock time.
 - **Strands are link partners:** notes are placed oldest-first, each on the strand opposite its strongest already-placed link partner (most shared neighbours, then most recent), so links become rungs. Existing placements never change when newer notes arrive.
 - **Focus:** click a node (or use the strand list / arrow keys) to centre it, brighten its rungs and dim everything outside 1, 2 or 3 link-hops. The card shows title, excerpt, tags, backlink count and links. Esc clears focus, a second Esc returns to the emblem.
-- **Graph mode** (read-only) and the **strand list** (a keyboard- and screen-reader-complete twin of the same data) are also available.
+- **Graph mode** (read-only; force layout up to 2,000 notes, a deterministic time-ordered spiral above that so a 10k vault opens instantly; computed on first use) and the **strand list** (a keyboard- and screen-reader-complete twin of the same data) are also available.
 - **Colour:** gold marks agent proposals only. The emblem's own gold (`markGold`) is a branding surface, used only inside the emblem renderer; tests enforce both rules.
 
 ## Not in V1 (planned V1.1)

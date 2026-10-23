@@ -100,7 +100,7 @@ Open `packages/helix/dist/index.html` in **Safari** (File > Open, or `open -a Sa
 | No gold anywhere except the emblem and proposal markers (demo has one proposal) | |
 | System setting Reduce Motion on: no rise, short crossfade only | |
 | Text is crisp on a Retina and on a non-Retina display (if both available) | |
-| Load time with the 10k-note `graph.js`: page usable in how many seconds? | |
+| Load time with the 10k-note `graph.js`: page usable in how many seconds? (Linux Chromium reference: ~1.5 s; Graph button ~0.25 s) | |
 
 ### Frame rate (the 60 fps claim)
 In Safari: Develop > Show Web Inspector > Console. Open the Helix view first (click the canvas), then paste:
@@ -119,7 +119,7 @@ In Safari: Develop > Show Web Inspector > Console. Open the Helix view first (cl
   console.log({ fps: (1000 / (gaps.reduce((a, b) => a + b) / gaps.length)).toFixed(1), p95_ms: gaps[Math.floor(gaps.length * 0.95)].toFixed(1), worst_ms: gaps[gaps.length - 1].toFixed(1) });
 })();
 ```
-Run it with the **10k-note** `graph.js` loaded, and again with the demo data (delete `graph.js`, reload). Target is about 60 fps (p95 under ~20 ms). Record both, and the Mac's display refresh rate.
+Run it with the **10k-note** `graph.js` loaded, and again with the demo data (delete `graph.js`, reload). Target is about 60 fps (p95 under ~20 ms). Linux Chromium reference: 10k notes 59.6 fps, p95 16.8 ms, worst 66.6 ms; demo 60.0 fps, p95 16.7 ms. Record both, and the Mac's display refresh rate. A software-rendered canvas on old hardware is exactly what this is meant to catch.
 
 ## Report template (copy back to Vesper / Claude)
 ```

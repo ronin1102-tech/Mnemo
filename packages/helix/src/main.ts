@@ -21,7 +21,9 @@ const data: GraphData = injected || demoData();
 sourceEl.textContent = injected ? `Vault snapshot ${injected.generatedAt.slice(0, 16).replace("T", " ")} · ${data.nodes.length} notes` : "Demo data — run `mnemo-ctl export-graph` to load your vault";
 
 const layout: HelixLayout = layoutHelix(data);
-const graphPts: Map<string, GraphPoint> = layoutGraph(data.nodes, data.links);
+// Graph-mode layout is computed on first use, so opening the helix never pays for it.
+let graphPtsCache: Map<string, GraphPoint> | null = null;
+const graphPoints = () => graphPtsCache || (graphPtsCache = layoutGraph(data.nodes, data.links));
 const titles = new Map(data.nodes.map((n) => [n.path, n.title]));
 const proposed = new Set(data.proposals.map((p) => p.path));
 const adj = new Map<string, Set<string>>();
@@ -105,7 +107,7 @@ function draw() {
   if (emb > 0) {
     if (mode === "graph") {
       ctx.globalAlpha = emb;
-      drawGraph(ctx, view, { pts: graphPts, links: data.links, titles, selected, hover, proposed, neighbours: neighbours(), gv });
+      drawGraph(ctx, view, { pts: graphPoints(), links: data.links, titles, selected, hover, proposed, neighbours: neighbours(), gv });
       ctx.globalAlpha = 1;
     } else {
       const reveal = rising ? easeOut(emb) : 1;
@@ -145,7 +147,7 @@ function select(path: string | null, reveal = true) {
   }
   if (path && reveal) {
     if (mode === "graph") {
-      const p = graphPts.get(path);
+      const p = graphPoints().get(path);
       if (p) gv = { ...gv, x: p.x, y: p.y };
     } else {
       const n = layout.byPath.get(path);
@@ -266,7 +268,7 @@ function pick(px: number, py: number): string | null {
   if (mode === "graph") {
     let best: string | null = null;
     let bd = R * R;
-    for (const [path, p] of graphPts) {
+    for (const [path, p] of graphPoints()) {
       const s = graphToScreen(view, gv, p);
       const d = (s.x - px) * (s.x - px) + (s.y - py) * (s.y - py);
       if (d < bd) { bd = d; best = path; }

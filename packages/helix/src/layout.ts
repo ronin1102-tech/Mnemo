@@ -136,9 +136,17 @@ export interface GraphPoint {
   y: number;
 }
 
-/** Deterministic force-directed layout for the read-only graph mode. */
+/** Above this many notes the O(n^2) force simulation is skipped (it took ~12 s at 10k notes). */
+export const FORCE_LAYOUT_MAX = 2000;
+
+/**
+ * Deterministic layout for the read-only graph mode. Small vaults get a force simulation.
+ * Large ones get a sunflower (phyllotaxis) spiral in time order, newest at the centre, relaxed
+ * by a few edge-attraction passes: O(n + links), so opening Graph mode stays instant at 10k notes.
+ */
 export function layoutGraph(nodes: NoteNode[], links: Link[]): Map<string, GraphPoint> {
   const n = nodes.length;
+  if (n > FORCE_LAYOUT_MAX) return layoutSpiral(nodes, links);
   let seed = 1234567;
   const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
   const pts: GraphPoint[] = nodes.map((nd) => ({ path: nd.path, x: (rnd() - 0.5) * 400, y: (rnd() - 0.5) * 400 }));
@@ -179,6 +187,24 @@ export function layoutGraph(nodes: NoteNode[], links: Link[]): Map<string, Graph
       pts[i].x += Math.max(-20, Math.min(20, vx[i])) * cool;
       pts[i].y += Math.max(-20, Math.min(20, vy[i])) * cool;
       vx[i] *= 0.5; vy[i] *= 0.5;
+    }
+  }
+  return new Map(pts.map((p) => [p.path, p]));
+}
+
+function layoutSpiral(nodes: NoteNode[], links: Link[]): Map<string, GraphPoint> {
+  const order = nodes.slice().sort((a, b) => timeOf(b) - timeOf(a) || a.path.localeCompare(b.path));
+  const golden = Math.PI * (3 - Math.sqrt(5));
+  const pts = order.map((nd, i) => ({ path: nd.path, x: 14 * Math.sqrt(i) * Math.cos(i * golden), y: 14 * Math.sqrt(i) * Math.sin(i * golden) }));
+  const idx = new Map(pts.map((p, i) => [p.path, i]));
+  for (let pass = 0; pass < 3; pass++) {
+    for (const l of links) {
+      const a = idx.get(l.src);
+      const b = idx.get(l.dst);
+      if (a === undefined || b === undefined || a === b) continue;
+      const dx = (pts[b].x - pts[a].x) * 0.05;
+      const dy = (pts[b].y - pts[a].y) * 0.05;
+      pts[a].x += dx; pts[a].y += dy; pts[b].x -= dx; pts[b].y -= dy;
     }
   }
   return new Map(pts.map((p) => [p.path, p]));
