@@ -1,8 +1,10 @@
-import { COLORS } from "./colors";
 import { demoData } from "./demo";
+import { drawEmblem } from "./emblem";
+import { QualityGovernor, TIERS, TIER_NAMES } from "./fx";
+import type { Tier } from "./fx";
 import { layoutGraph, layoutHelix, ROW_GAP, timeOf, withinHops } from "./layout";
 import type { GraphPoint, HelixLayout } from "./layout";
-import { drawEmblem, drawGraph, drawHelix, graphToScreen, helixPos, poolHit } from "./render";
+import { drawBackground, drawDust, drawGraph, drawHelix, graphToScreen, helixPos, poolHit } from "./render";
 import type { GraphView } from "./render";
 import type { GraphData } from "./types";
 
@@ -15,14 +17,22 @@ const listEl = $<HTMLUListElement>("strand-list");
 const detailEl = $<HTMLElement>("detail");
 const liveEl = $<HTMLElement>("live");
 const sourceEl = $<HTMLElement>("source");
+const tipEl = $<HTMLElement>("tip");
+const hintEl = $<HTMLElement>("hint");
+const fxBtn = $<HTMLButtonElement>("fx");
+const segInd = $<HTMLElement>("seg-ind");
 
 const injected = (window as unknown as { __MNEMO_GRAPH__?: GraphData }).__MNEMO_GRAPH__;
 const data: GraphData = injected || demoData();
-sourceEl.textContent = injected ? `Vault snapshot ${injected.generatedAt.slice(0, 16).replace("T", " ")} · ${data.nodes.length} notes` : "Demo data — run `mnemo-ctl export-graph` to load your vault";
+sourceEl.textContent = injected ? `Vault · ${data.nodes.length.toLocaleString()} notes · snapshot ${injected.generatedAt.slice(0, 16).replace("T", " ")}` : "Demo vault · run mnemo-ctl export-graph to load yours";
+$("count").textContent = `${data.nodes.length.toLocaleString()} notes`;
 
 const layout: HelixLayout = layoutHelix(data);
-const graphPts: Map<string, GraphPoint> = layoutGraph(data.nodes, data.links);
+// Graph-mode layout is computed on first use, so opening the helix never pays for it.
+let graphPtsCache: Map<string, GraphPoint> | null = null;
+const graphPoints = () => graphPtsCache || (graphPtsCache = layoutGraph(data.nodes, data.links));
 const titles = new Map(data.nodes.map((n) => [n.path, n.title]));
+const notesByPath = new Map(data.nodes.map((n) => [n.path, n]));
 const proposed = new Set(data.proposals.map((p) => p.path));
 const adj = new Map<string, Set<string>>();
 for (const l of data.links) {
@@ -33,163 +43,294 @@ for (const l of data.links) {
   adj.get(l.dst)!.add(l.src);
 }
 const EMPTY = new Set<string>();
+const degree = new Map<string, number>([...adj].map(([p, n]) => [p, n.size]));
+/** Roughly the top 8% most-linked notes are hubs (always labelled in graph mode). */
+const hubDegree = (() => {
+  const d = [...degree.values()].sort((a, b) => b - a);
+  return Math.max(2, d[Math.floor(d.length * 0.08)] || 2);
+})();
+const dateOf = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+
+// ---- effects quality --------------------------------------------------------
 
 const reduceMotion = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+const store = {
+  get(k: string) { try { return window.localStorage.getItem(k); } catch (_) { return null; } },
+  set(k: string, v: string) { try { window.localStorage.setItem(k, v); } catch (_) { /* private mode */ } },
+};
+/** `?fx=0..3` pins a tier (for QA measurement); otherwise Auto (governed) or Off. */
+const forcedMatch = /[?&]fx=([0-3])/.exec(window.location.search);
+const forced: Tier | null = forcedMatch ? (Number(forcedMatch[1]) as Tier) : null;
+let fxOff = store.get("mnemo.fx") === "off";
+const governor = new QualityGovernor(3, 0);
+/** No judging during warm-up (load, mode switch, tab return): one slow frame must not condemn a session. */
+let holdUntil = 0;
+const hold = (ms = 2000) => { holdUntil = performance.now() + ms; };
+const tier = (): Tier => (reduceMotion || fxOff ? 0 : forced !== null ? forced : governor.tier);
+const fx = () => TIERS[tier()];
+
+function updateFxButton() {
+  const label = reduceMotion ? "Reduced motion" : fxOff ? "Off" : forced !== null ? `${TIER_NAMES[forced]} (pinned)` : `Auto · ${governor.tier === 0 ? "Static" : TIER_NAMES[governor.tier]}`;
+  $("fx-label").textContent = `Effects: ${label}`;
+  fxBtn.setAttribute("aria-label", `Effects: ${label}. Toggle visual effects.`);
+  fxBtn.setAttribute("aria-pressed", String(!fxOff && !reduceMotion));
+  fxBtn.disabled = reduceMotion;
+}
+
+// ---- state ------------------------------------------------------------------
 
 let mode: Mode = "emblem";
 let emb = 0; // 0 = emblem, 1 = full view; animated
 let embTarget = 0;
-let embMs = 250; // duration of the current emblem <-> view transition
+let embMs = 250;
 let rising = false; // the 1.2s rising transition (plays once per vault open)
 let risePlayed = false;
 let depth = 1; // focus hop depth, 1-3
 let scrollY = 0;
+let scrollTarget = 0;
 let selected: string | null = null;
+let selectedAt = -10;
 let hover: string | null = null;
 let gv: GraphView = { x: 0, y: 0, zoom: 1 };
-const view = { w: 0, h: 0 };
-let dirty = true;
+let gvTarget: GraphView = { x: 0, y: 0, zoom: 1 };
+const view: { w: number; h: number; cx: number } = { w: 0, h: 0, cx: 0 };
+let cxTarget = 0;
+let dpr = 1;
 let raf = 0;
 let lastT = 0;
+let clock = 0; // seconds of animated time
+let lastInput = 0;
+let frameNo = 0;
 
 function resize() {
-  const dpr = Math.min(window.devicePixelRatio || 1, 2); // cap: cheap on software-rendered canvases
+  dpr = Math.min(window.devicePixelRatio || 1, 2); // cap: cheap on software-rendered canvases
   const r = canvas.getBoundingClientRect();
   view.w = Math.max(1, Math.floor(r.width));
   view.h = Math.max(1, Math.floor(r.height));
   canvas.width = Math.floor(view.w * dpr);
   canvas.height = Math.floor(view.h * dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  clampScroll();
+  scrollTarget = clamp(scrollTarget);
+  scrollY = clamp(scrollY);
+  cxTarget = centreTarget();
+  view.cx = cxTarget;
+  placeSegIndicator();
+  hold();
   request();
 }
 
 const maxScroll = () => Math.max(0, layout.height - view.h);
-function clampScroll() {
-  scrollY = Math.max(0, Math.min(maxScroll(), scrollY));
-}
+const clamp = (v: number) => Math.max(0, Math.min(maxScroll(), v));
 
 function request() {
-  dirty = true;
   if (!raf) raf = requestAnimationFrame(frame);
 }
 
-function frame(t: number) {
+function touch() {
+  lastInput = performance.now();
+  if (!hintEl.hidden) hintEl.classList.add("gone");
+}
+
+/** One frame: advance transitions and easing, draw, and keep looping only while something moves. */
+function frame(ts: number) {
   raf = 0;
-  const dt = lastT ? Math.min(64, t - lastT) : 16;
-  lastT = t;
-  let animating = false;
+  const dt = lastT ? Math.min(64, ts - lastT) : 16;
+  lastT = ts;
+  const spec = fx();
+  // calm when nobody has touched it for a while: ambient effects drop to ~30 fps
+  const calm = spec.animate && ts - lastInput > 45000;
+  frameNo++;
+  if (calm && frameNo % 2) {
+    raf = requestAnimationFrame(frame);
+    return;
+  }
+  if (spec.animate) clock += dt / 1000;
+
+  let moving = false;
   if (emb !== embTarget) {
     emb += Math.sign(embTarget - emb) * Math.min(Math.abs(embTarget - emb), dt / embMs);
-    animating = emb !== embTarget;
-    if (!animating) rising = false;
+    moving = emb !== embTarget;
+    if (!moving) rising = false;
   }
+  const ease = reduceMotion ? 1 : 1 - Math.exp(-dt / 90);
+  if (Math.abs(scrollTarget - scrollY) > 0.3) {
+    scrollY += (scrollTarget - scrollY) * ease;
+    moving = true;
+  } else scrollY = scrollTarget;
+  if (Math.abs(gvTarget.x - gv.x) + Math.abs(gvTarget.y - gv.y) + Math.abs(gvTarget.zoom - gv.zoom) * 100 > 0.3) {
+    gv = { x: gv.x + (gvTarget.x - gv.x) * ease, y: gv.y + (gvTarget.y - gv.y) * ease, zoom: gv.zoom + (gvTarget.zoom - gv.zoom) * ease };
+    moving = true;
+  } else gv = { ...gvTarget };
+
+  cxTarget = centreTarget();
+  if (Math.abs(cxTarget - view.cx) > 0.3) {
+    view.cx += (cxTarget - view.cx) * (reduceMotion ? 1 : 1 - Math.exp(-dt / 140));
+    moving = true;
+  } else view.cx = cxTarget;
+
+  const t0 = performance.now();
   draw();
-  dirty = false;
-  if (animating) raf = requestAnimationFrame(frame);
+  const cost = performance.now() - t0;
+  if (spec.animate && !calm && ts > holdUntil && forced === null && !fxOff && !reduceMotion && governor.sample(cost, dt)) updateFxButton();
+
+  if (moving || spec.animate) raf = requestAnimationFrame(frame);
   else lastT = 0;
+}
+
+/** Keep the coil clear of the focus card: centre it in the space to the card's right when there is room. */
+function centreTarget() {
+  const card = !detailEl.hidden && mode !== "emblem" && view.w > 900;
+  return card ? view.w / 2 + Math.min(200, (view.w - 760) / 2) : view.w / 2;
 }
 
 function neighbours(): Set<string> {
   return selected ? withinHops(adj, selected, depth) : EMPTY;
 }
 
-/** Ease-out for the rise. */
 const easeOut = (t: number) => 1 - Math.pow(1 - t, 3);
 
 function draw() {
-  ctx.globalAlpha = 1;
-  ctx.fillStyle = COLORS.bg;
-  ctx.fillRect(0, 0, view.w, view.h);
-  if (emb < 1) drawEmblem(ctx, view, 1 + emb * 0.12, 1 - Math.min(1, emb * 1.6));
+  const spec = fx();
+  drawBackground(ctx, view, dpr);
+  const travel = mode === "graph" ? gv.y * gv.zoom : mode === "helix" ? scrollY : 0;
+  drawDust(ctx, view, clock, spec.dust, travel, 1);
+  if (emb < 1) drawEmblem(ctx, view, clock, 1 + emb * 0.12, 1 - Math.min(1, emb * 1.6), spec, dpr);
   if (emb > 0) {
     if (mode === "graph") {
-      ctx.globalAlpha = emb;
-      drawGraph(ctx, view, { pts: graphPts, links: data.links, titles, selected, hover, proposed, neighbours: neighbours(), gv });
-      ctx.globalAlpha = 1;
+      drawGraph(ctx, view, { pts: graphPoints(), links: data.links, titles, selected, hover, proposed, neighbours: neighbours(), gv, t: clock, fx: spec, selectedAt, alpha: emb, degree, hubDegree });
     } else {
       const reveal = rising ? easeOut(emb) : 1;
-      drawHelix(ctx, view, { layout, scrollY, selected, hover, proposed, neighbours: neighbours(), reveal, alpha: rising ? 1 : emb });
+      drawHelix(ctx, view, { layout, scrollY, selected, hover, proposed, neighbours: neighbours(), reveal, alpha: rising ? 1 : emb, t: clock, fx: spec, selectedAt });
     }
   }
+  placeTip();
 }
 
 // ---- mode, selection ----------------------------------------------------
 
 function setMode(m: Mode) {
   mode = m;
+  hold();
   embTarget = m === "emblem" ? 0 : 1;
   // The rise plays once, when the vault is first opened; later switches are a quick crossfade.
-  // prefers-reduced-motion: crossfade only.
   rising = m === "helix" && !risePlayed && !reduceMotion && emb < 1;
   if (m !== "emblem") risePlayed = true;
-  embMs = rising ? 1200 : 250;
-  for (const b of document.querySelectorAll<HTMLButtonElement>("[data-mode]")) b.setAttribute("aria-pressed", String(b.dataset.mode === m));
+  embMs = rising ? 1200 : 300;
+  for (const b of document.querySelectorAll<HTMLButtonElement>(".seg [data-mode]")) b.setAttribute("aria-pressed", String(b.dataset.mode === m));
+  placeSegIndicator();
   canvas.setAttribute("aria-label", canvasLabel());
+  document.body.setAttribute("data-mode", m);
+  if (m === "graph" && !graphFitted) fitGraph();
   if (m === "emblem") hideDetail();
+  else if (selected) showDetail(selected);
+  hover = null;
   request();
+}
+
+let graphFitted = false;
+/** Frame the whole graph in the stage the first time graph mode opens. */
+function fitGraph() {
+  graphFitted = true;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const p of graphPoints().values()) {
+    x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y);
+  }
+  if (!isFinite(x0)) return;
+  const zoom = Math.max(0.2, Math.min(3, (view.w - 260) / Math.max(1, x1 - x0), (view.h - 160) / Math.max(1, y1 - y0)));
+  gvTarget = { x: (x0 + x1) / 2, y: (y0 + y1) / 2, zoom };
+  gv = { ...gvTarget, zoom: zoom * 0.8 }; // a gentle settle-in
+}
+
+function placeSegIndicator() {
+  const b = document.querySelector<HTMLButtonElement>(`.seg [data-mode="${mode}"]`);
+  if (!b) return;
+  segInd.style.width = b.offsetWidth + "px";
+  segInd.style.transform = `translateX(${b.offsetLeft}px)`;
 }
 
 function canvasLabel() {
   const what = mode === "graph" ? "Graph" : "Helix";
   return mode === "emblem"
     ? "Mnemo emblem. Press Enter to open the helix."
-    : `${what} of ${data.nodes.length} notes. Use arrow keys to move between notes; the note list beside it has the same content.`;
+    : `${what} of ${data.nodes.length} notes. Use arrow keys to move between notes; the strand list beside it has the same content.`;
 }
 
 function select(path: string | null, reveal = true) {
   selected = path;
+  selectedAt = clock;
+  touch();
   for (const li of listEl.querySelectorAll<HTMLElement>("button[data-path]")) {
-    if (li.dataset.path === path) li.setAttribute("aria-current", "true");
-    else li.removeAttribute("aria-current");
+    if (li.dataset.path === path) {
+      li.setAttribute("aria-current", "true");
+      if (reveal) scrollListTo(li);
+    } else li.removeAttribute("aria-current");
   }
   if (path && reveal) {
     if (mode === "graph") {
-      const p = graphPts.get(path);
-      if (p) gv = { ...gv, x: p.x, y: p.y };
+      const p = graphPoints().get(path);
+      if (p) gvTarget = { ...gvTarget, x: p.x, y: p.y };
     } else {
       const n = layout.byPath.get(path);
-      if (n) {
-        scrollY = n.y - view.h / 2;
-        clampScroll();
-      }
+      if (n) scrollTarget = clamp(n.y - view.h / 2);
     }
   }
-  if (path) showDetail(path);
+  if (path && mode !== "emblem") showDetail(path);
   else hideDetail();
   request();
 }
 
+function scrollListTo(li: HTMLElement) {
+  const box = listEl.getBoundingClientRect();
+  const r = li.getBoundingClientRect();
+  if (r.top < box.top || r.bottom > box.bottom) listEl.scrollTop += r.top - box.top - box.height / 2 + r.height / 2;
+}
+
+// ---- focus card ---------------------------------------------------------------
+
 function showDetail(path: string) {
-  const note = data.nodes.find((n) => n.path === path);
+  const note = notesByPath.get(path);
   if (!note) return;
   const out = data.links.filter((l) => l.src === path && titles.has(l.dst)).map((l) => l.dst);
   const inn = data.links.filter((l) => l.dst === path && titles.has(l.src)).map((l) => l.src);
   const props = data.proposals.filter((p) => p.path === path);
-  detailEl.hidden = false;
   detailEl.innerHTML = "";
-  const h = document.createElement("h2");
-  h.textContent = note.title;
-  detailEl.appendChild(h);
-  detailEl.appendChild(el("p", "path", note.path + " · " + new Date(timeOf(note)).toISOString().slice(0, 10) + " · " + inn.length + " backlink" + (inn.length === 1 ? "" : "s")));
+  const close = el("button", "card-close", "×");
+  close.setAttribute("aria-label", "Close focus");
+  (close as HTMLButtonElement).type = "button";
+  close.addEventListener("click", () => select(null));
+  detailEl.appendChild(close);
+  detailEl.appendChild(el("p", "eyebrow", `${dateOf(timeOf(note))} · ${inn.length} backlink${inn.length === 1 ? "" : "s"} · ${out.length} link${out.length === 1 ? "" : "s"}`));
+  detailEl.appendChild(el("h2", "card-title", note.title));
+  detailEl.appendChild(el("p", "card-path", note.path));
   if (note.excerpt) detailEl.appendChild(el("p", "excerpt", note.excerpt));
-  if (note.tags.length) detailEl.appendChild(el("p", "tags", note.tags.map((t) => "#" + t).join(" ")));
-  for (const p of props) detailEl.appendChild(el("p", "proposal", `Pending ${p.op} proposal from ${p.client}. Review with: mnemo-ctl show ${p.id}`));
+  if (note.tags.length) {
+    const tags = el("div", "tags", "");
+    for (const t of note.tags) tags.appendChild(el("span", "tag", "#" + t));
+    detailEl.appendChild(tags);
+  }
+  for (const p of props) detailEl.appendChild(el("p", "proposal proposal-note", `An agent (${p.client}) proposes to ${p.op} this note. Review: mnemo-ctl show ${p.id}`));
   detailEl.appendChild(depthControl(path));
-  detailEl.appendChild(linkGroup("Links to", out));
-  detailEl.appendChild(linkGroup("Linked from", inn));
+  const cols = el("div", "link-cols", "");
+  cols.appendChild(linkGroup("Links to", out));
+  cols.appendChild(linkGroup("Linked from", inn));
+  detailEl.appendChild(cols);
+  if (detailEl.hidden) {
+    detailEl.hidden = false;
+    detailEl.classList.remove("open");
+    requestAnimationFrame(() => detailEl.classList.add("open"));
+  }
   liveEl.textContent = `Selected ${note.title}. ${out.length} outgoing, ${inn.length} incoming links.`;
 }
 
 /** Focus depth: how many link-hops stay lit around the selection. */
 function depthControl(path: string) {
-  const wrap = document.createElement("div");
-  wrap.className = "depth";
-  wrap.appendChild(el("span", "", "Depth"));
+  const wrap = el("div", "depth", "");
+  wrap.setAttribute("role", "group");
+  wrap.setAttribute("aria-label", "Focus depth");
+  wrap.appendChild(el("span", "depth-label", "Depth"));
   for (const n of [1, 2, 3]) {
-    const b = document.createElement("button");
+    const b = el("button", "", String(n)) as HTMLButtonElement;
     b.type = "button";
-    b.textContent = String(n);
     b.setAttribute("aria-pressed", String(n === depth));
     b.setAttribute("aria-label", `Show ${n} link hop${n > 1 ? "s" : ""}`);
     b.addEventListener("click", () => {
@@ -203,36 +344,68 @@ function depthControl(path: string) {
 }
 
 function hideDetail() {
+  detailEl.classList.remove("open");
   detailEl.hidden = true;
   detailEl.innerHTML = "";
 }
 
 function el(tag: string, cls: string, text: string) {
   const e = document.createElement(tag);
-  e.className = cls;
+  if (cls) e.className = cls;
   e.textContent = text;
   return e;
 }
 
 function linkGroup(label: string, paths: string[]) {
-  const wrap = document.createElement("div");
-  wrap.appendChild(el("h3", "", `${label} (${paths.length})`));
+  const wrap = el("div", "link-group", "");
+  wrap.appendChild(el("h3", "", `${label} · ${paths.length}`));
   const ul = document.createElement("ul");
-  for (const p of paths) {
+  for (const p of paths.slice(0, 40)) {
     const li = document.createElement("li");
-    const b = document.createElement("button");
+    const b = el("button", "linkbtn", titles.get(p) || p) as HTMLButtonElement;
     b.type = "button";
-    b.className = "linkbtn";
-    b.textContent = titles.get(p) || p;
     b.addEventListener("click", () => select(p));
     li.appendChild(b);
     ul.appendChild(li);
   }
+  if (paths.length > 40) ul.appendChild(el("li", "more", `+ ${paths.length - 40} more`));
+  if (!paths.length) ul.appendChild(el("li", "none", "None"));
   wrap.appendChild(ul);
   return wrap;
 }
 
-// ---- accessible strand list ---------------------------------------------
+// ---- hover tooltip ----------------------------------------------------------------
+
+function setHover(h: string | null) {
+  if (h === hover) return;
+  hover = h;
+  canvas.style.cursor = h ? "pointer" : mode === "emblem" ? "pointer" : "grab";
+  if (h && h !== selected) {
+    const n = notesByPath.get(h)!;
+    tipEl.innerHTML = "";
+    tipEl.appendChild(el("strong", "", n.title));
+    tipEl.appendChild(el("span", "", `${dateOf(timeOf(n))} · ${(adj.get(h) || EMPTY).size} links${proposed.has(h) ? " · proposal pending" : ""}`));
+    tipEl.hidden = false;
+  } else tipEl.hidden = true;
+  request();
+}
+
+function placeTip() {
+  if (tipEl.hidden || !hover) return;
+  let p: { x: number; y: number } | null = null;
+  if (mode === "graph") {
+    const g = graphPoints().get(hover);
+    if (g) p = graphToScreen(view, gv, g);
+  } else if (mode === "helix") {
+    const n = layout.byPath.get(hover);
+    if (n) p = helixPos(n, view, scrollY);
+  }
+  if (!p) return;
+  const right = p.x < view.w - 260;
+  tipEl.style.transform = `translate(${Math.round(right ? p.x + 18 : p.x - 18 - tipEl.offsetWidth)}px, ${Math.round(p.y + 14)}px)`;
+}
+
+// ---- strand list (the accessible twin) ----------------------------------------
 
 function buildList() {
   const frag = document.createDocumentFragment();
@@ -241,14 +414,17 @@ function buildList() {
     const b = document.createElement("button");
     b.type = "button";
     b.dataset.path = n.note.path;
+    b.className = "row s" + n.strand;
     const deg = (adj.get(n.note.path) || EMPTY).size;
     const prop = proposed.has(n.note.path);
-    b.setAttribute("aria-label", `${n.note.title}, ${new Date(timeOf(n.note)).toISOString().slice(0, 10)}, ${deg} links${prop ? ", has a pending agent proposal" : ""}`);
-    const t = document.createElement("span");
-    t.textContent = n.note.title;
-    b.appendChild(t);
+    b.setAttribute("aria-label", `${n.note.title}, ${dateOf(timeOf(n.note))}, ${deg} links${prop ? ", has a pending agent proposal" : ""}`);
+    b.appendChild(el("span", "rail", ""));
+    const body = el("span", "row-body", "");
+    body.appendChild(el("span", "row-title", n.note.title));
+    body.appendChild(el("span", "row-date", dateOf(timeOf(n.note))));
+    b.appendChild(body);
     if (prop) b.appendChild(el("span", "proposal badge", "proposal"));
-    b.appendChild(el("span", "meta", String(deg)));
+    b.appendChild(el("span", "pill", String(deg)));
     b.addEventListener("click", () => {
       if (mode === "emblem") setMode("helix");
       select(n.note.path);
@@ -259,20 +435,21 @@ function buildList() {
   listEl.appendChild(frag);
 }
 
-// ---- pointer / keyboard ---------------------------------------------------
+// ---- pointer / keyboard -------------------------------------------------------
 
 function pick(px: number, py: number): string | null {
   const R = 14;
   if (mode === "graph") {
     let best: string | null = null;
     let bd = R * R;
-    for (const [path, p] of graphPts) {
+    for (const [path, p] of graphPoints()) {
       const s = graphToScreen(view, gv, p);
       const d = (s.x - px) * (s.x - px) + (s.y - py) * (s.y - py);
       if (d < bd) { bd = d; best = path; }
     }
     return best;
   }
+  if (mode !== "helix") return null;
   const lo = Math.max(0, Math.floor((scrollY + py - 60) / ROW_GAP) - 2);
   const hi = Math.min(layout.nodes.length - 1, lo + 5);
   let best: string | null = null;
@@ -296,10 +473,11 @@ function skipRise() {
     request();
   }
 }
-document.addEventListener("keydown", skipRise, true);
+document.addEventListener("keydown", () => { skipRise(); touch(); }, true);
 
 canvas.addEventListener("pointerdown", (e) => {
   skipRise();
+  touch();
   drag = { x: e.clientX, y: e.clientY, moved: false };
   try { canvas.setPointerCapture(e.pointerId); } catch (_) { /* older engines */ }
 });
@@ -311,12 +489,17 @@ canvas.addEventListener("pointermove", (e) => {
     if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
     drag.x = e.clientX;
     drag.y = e.clientY;
-    if (mode === "graph") gv = { ...gv, x: gv.x - dx / gv.zoom, y: gv.y - dy / gv.zoom };
-    else if (mode === "helix") { scrollY -= dy; clampScroll(); }
+    if (mode === "graph") {
+      gvTarget = { ...gvTarget, x: gvTarget.x - dx / gv.zoom, y: gvTarget.y - dy / gv.zoom };
+      gv = { ...gvTarget, zoom: gv.zoom };
+    } else if (mode === "helix") {
+      scrollTarget = clamp(scrollTarget - dy);
+      scrollY = scrollTarget;
+    }
+    touch();
     request();
   } else if (mode !== "emblem") {
-    const h = pick(e.clientX - r.left, e.clientY - r.top);
-    if (h !== hover) { hover = h; canvas.style.cursor = h ? "pointer" : "default"; request(); }
+    setHover(pick(e.clientX - r.left, e.clientY - r.top));
   }
 });
 canvas.addEventListener("pointerup", (e) => {
@@ -331,17 +514,25 @@ canvas.addEventListener("pointerup", (e) => {
   if (!hit && mode === "helix" && poolHit(view, layout, scrollY, px, py)) {
     // the water is the root: back to the whole-vault view
     select(null);
-    scrollY = 0;
+    scrollTarget = 0;
     return request();
   }
+  setHover(null);
   select(hit, false);
 });
-canvas.addEventListener("pointerleave", () => { if (hover) { hover = null; request(); } });
+canvas.addEventListener("pointerleave", () => setHover(null));
 canvas.addEventListener("wheel", (e) => {
   if (mode === "emblem") return;
   e.preventDefault();
-  if (mode === "graph") gv = { ...gv, zoom: Math.max(0.2, Math.min(4, gv.zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1))) };
-  else { scrollY += e.deltaY; clampScroll(); }
+  touch();
+  if (mode === "graph") {
+    const z = Math.max(0.2, Math.min(4, gvTarget.zoom * (e.deltaY < 0 ? 1.12 : 1 / 1.12)));
+    gvTarget = { ...gvTarget, zoom: z };
+  } else {
+    scrollTarget = clamp(scrollTarget + e.deltaY * (e.deltaMode === 1 ? 36 : 1));
+    if (reduceMotion) scrollY = scrollTarget;
+  }
+  setHover(null);
   request();
 }, { passive: false });
 
@@ -363,12 +554,23 @@ canvas.addEventListener("keydown", (e) => {
   if (e.key === "End") next = layout.nodes.length - 1;
   if (next !== -2 && layout.nodes[next]) { e.preventDefault(); select(layout.nodes[next].note.path); }
 });
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && document.activeElement !== canvas && selected) select(null);
+});
 
-for (const b of document.querySelectorAll<HTMLButtonElement>("[data-mode]")) {
+for (const b of document.querySelectorAll<HTMLButtonElement>(".seg [data-mode]")) {
   b.addEventListener("click", () => setMode(b.dataset.mode as Mode));
 }
+fxBtn.addEventListener("click", () => {
+  fxOff = !fxOff;
+  store.set("mnemo.fx", fxOff ? "off" : "auto");
+  updateFxButton();
+  request();
+});
 window.addEventListener("resize", resize);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) { lastT = 0; hold(); request(); } });
 
 buildList();
+updateFxButton();
 resize();
 setMode("emblem");

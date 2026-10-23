@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "./expect";
 import { ROW_GAP, assignStrands, layoutGraph, layoutHelix, radiusAt, strandX, visibleRange, withinHops } from "../src/layout";
 import type { GraphData } from "../src/types";
 
@@ -101,5 +101,15 @@ describe("layout at scale", () => {
     const l = layoutHelix({ generatedAt: "", nodes, links, proposals: [] });
     expect(Date.now() - t).toBeLessThan(1000);
     expect(l.nodes).toHaveLength(10000);
+  });
+
+  it("graph layout of 10,000 notes is near-instant (no O(n^2) simulation)", () => {
+    const nodes = Array.from({ length: 10000 }, (_, i) => note(`n${i}.md`, i));
+    const links = Array.from({ length: 30000 }, (_, i) => ({ src: `n${i % 10000}.md`, dst: `n${(i * 7919 + 13) % 10000}.md` }));
+    const t = Date.now();
+    const pts = layoutGraph(nodes, links);
+    expect(Date.now() - t).toBeLessThan(500);
+    expect(pts.size).toBe(10000);
+    expect(Number.isFinite(pts.get("n5.md")!.x)).toBe(true);
   });
 });

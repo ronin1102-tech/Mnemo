@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "./expect.js";
 import { createServer, localDate } from "../src/server.js";
 import { Vault } from "../src/vault.js";
 import { tmpVault } from "./helpers.js";
