@@ -2,11 +2,11 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { lineDiff } from "./diff.js";
-import { rewriteWikilinks } from "./links.js";
+import { rewriteLinks } from "./links.js";
 import { Vault, VaultError } from "./vault.js";
 
 export const PROPOSAL_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-export const MAX_NOTE_BYTES = 1_000_000;
+export const MAX_NOTE_BYTES = 10_000_000;
 
 export type ProposalOp = "write" | "append" | "patch" | "move" | "delete";
 /** `stale` = the vault moved on after the proposal was made; approval halted and nothing was applied. */
@@ -67,7 +67,7 @@ export class ProposalStore {
   }
 
   private limit(s: string) {
-    if (Buffer.byteLength(s) > MAX_NOTE_BYTES) throw new VaultError("Note exceeds 1MB limit");
+    if (Buffer.byteLength(s) > MAX_NOTE_BYTES) throw new VaultError("Note exceeds 10MB limit");
   }
 
   private create(op: ProposalOp, rel: string, changes: Change[], diff: string, client: string, to?: string): Proposal {
@@ -111,6 +111,7 @@ export class ProposalStore {
     const p = this.vault.normalize(rel);
     const cur = this.readCurrent(p);
     if (cur === null) throw new VaultError(`Note not found: ${p}`);
+    if (Buffer.byteLength(cur) > MAX_NOTE_BYTES) throw new VaultError("Note is over 10MB: readable, but not patchable");
     if (anchor === "") throw new VaultError("Anchor must not be empty");
     const first = cur.indexOf(anchor);
     if (first < 0) throw new VaultError("Anchor not found; nothing proposed");
@@ -139,7 +140,7 @@ export class ProposalStore {
     for (const other of all) {
       if (other === from) continue;
       const body = this.vault.read(other);
-      const next = rewriteWikilinks(body, all, from, to);
+      const next = rewriteLinks(body, all, other, from, to);
       if (next === body) continue;
       this.limit(next);
       changes.push({ path: other, baseHash: sha(body), after: next });

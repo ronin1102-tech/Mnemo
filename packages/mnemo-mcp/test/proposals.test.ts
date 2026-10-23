@@ -115,4 +115,21 @@ describe("write gate", () => {
     expect(fs.readdirSync(root).filter((f) => f.includes("mnemo-tmp"))).toEqual([]);
     expect(fs.readFileSync(path.join(root, "a.md"), "utf8")).toHaveLength(100000);
   });
+
+  it("move rewrites relative markdown links from each note's own directory", () => {
+    const { root, store } = setup({
+      "old.md": "# Old",
+      "x.md": "[a](old.md) [b](./old.md#h) [c](http://e.com/old.md)",
+      "dir/y.md": "[up](../old.md)",
+    });
+    store.approve(store.proposeMove("old.md", "deep/er/new.md", "c").id);
+    expect(fs.readFileSync(path.join(root, "x.md"), "utf8")).toBe("[a](deep/er/new.md) [b](./deep/er/new.md#h) [c](http://e.com/old.md)");
+    expect(fs.readFileSync(path.join(root, "dir/y.md"), "utf8")).toBe("[up](../deep/er/new.md)");
+  });
+
+  it("refuses to patch a note over the 10MB cap", () => {
+    const { root, store } = setup({ "big.md": "needle " + "x".repeat(10_000_001) });
+    expect(() => store.proposePatch("big.md", "needle", "y", "c")).toThrow(/10MB/);
+    expect(fs.readdirSync(path.join(root, ".mnemo/proposals"))).toHaveLength(0);
+  });
 });

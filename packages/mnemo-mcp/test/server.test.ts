@@ -40,7 +40,7 @@ describe("mnemo mcp server", () => {
     });
     expect((await call("search_notes", { query: "doub" })).data[0].path).toBe("ideas/helix.md");
     expect((await call("read_note", { path: "Mnemo.md" })).data.content).toContain("Second brain");
-    expect((await call("list_notes", { folder: "ideas" })).data).toHaveLength(1);
+    expect((await call("list_notes", { folder: "ideas" })).data.notes).toHaveLength(1);
     expect((await call("list_recent", { limit: 2 })).data).toHaveLength(2);
     const bl = (await call("get_backlinks", { path: "Mnemo.md" })).data.map((n: any) => n.path).sort();
     expect(bl).toEqual(["ideas/helix.md", "inbox.md"]);
@@ -112,5 +112,55 @@ describe("mnemo mcp server", () => {
     expect(sim[0].score).toBeGreaterThan(0.3);
     expect(sim[0].reasons.join(" ")).toMatch(/links to the same/);
     expect((await call("find_similar", { path: "nope.md" })).isError).toBe(true);
+  });
+
+  it("reads frontmatter: tags (all YAML forms), title, and feeds search/tags/similarity", async () => {
+    const { call } = await connect({
+      "a.md": "---\ntitle: Alpha Note\ntags: [Garden, \"deep-work\"]\ncreated: 2026-01-02\nowner: tracy\n---\nBody about zebras.",
+      "b.md": "---\ntags:\n  - garden\n  - '#misc'\n---\n# Beta\nInline #garden too",
+      "c.md": "---\ntags: garden, other\n---\nplain",
+      "d.md": "no frontmatter #solo",
+    });
+    expect((await call("get_tags")).data).toEqual([
+      { tag: "garden", count: 3 }, { tag: "deep-work", count: 1 }, { tag: "misc", count: 1 }, { tag: "other", count: 1 }, { tag: "solo", count: 1 },
+    ]);
+    const r = (await call("read_note", { path: "a.md" })).data;
+    expect(r.frontmatter).toEqual({ tags: ["garden", "deep-work"], title: "Alpha Note", created: "2026-01-02" });
+    expect((await call("search_notes", { query: "alpha" })).data[0].title).toBe("Alpha Note");
+    expect((await call("search_notes", { query: "deep" })).data[0].path).toBe("a.md"); // tags are searchable
+    const sim = (await call("find_similar", { path: "a.md" })).data;
+    expect(sim.map((x: any) => x.path).sort()).toEqual(["b.md", "c.md"]);
+    expect(sim[0].reasons.join(" ")).toContain("#garden");
+  });
+
+  it("search filters by folder, tag and date; backlinks carry context; list_notes counts folders", async () => {
+    const { root, call } = await connect({
+      "work/a.md": "kiwi #x\nsee [[b]] for kiwi",
+      "work/sub/b.md": "kiwi #y",
+      "home/c.md": "kiwi #x",
+    });
+    fs.utimesSync(path.join(root, "home/c.md"), new Date("2020-01-01"), new Date("2020-01-01"));
+    const paths = async (a: Record<string, unknown>) => (await call("search_notes", { query: "kiwi", ...a })).data.map((h: any) => h.path).sort();
+    expect(await paths({})).toHaveLength(3);
+    expect(await paths({ folder: "work" })).toEqual(["work/a.md", "work/sub/b.md"]);
+    expect(await paths({ tag: "x" })).toEqual(["home/c.md", "work/a.md"]);
+    expect(await paths({ before: "2021-01-01" })).toEqual(["home/c.md"]);
+    expect(await paths({ after: "2021-01-01", tag: "#x" })).toEqual(["work/a.md"]);
+    expect((await call("get_backlinks", { path: "work/sub/b.md" })).data[0]).toMatchObject({ path: "work/a.md", context: "see [[b]] for kiwi" });
+    expect((await call("list_notes", {})).data.folders).toEqual([{ name: "home", count: 1 }, { name: "work", count: 2 }]);
+    expect((await call("read_note", { path: "work/sub/b.md" })).data.backlinks[0].path).toBe("work/a.md");
+  });
+
+  it("get_neighbors lists unlinked related notes; relative markdown links are edges", async () => {
+    const { call } = await connect({
+      "a.md": "# A #t\n[hub](hub.md)",
+      "b.md": "# B #t\n[hub](./hub.md#top)",
+      "hub.md": "# Hub",
+      "dir/c.md": "[up](../hub.md) and [web](https://x.dev/a.md) and [nope](missing.md)",
+    });
+    expect((await call("get_backlinks", { path: "hub.md" })).data.map((n: any) => n.path).sort()).toEqual(["a.md", "b.md", "dir/c.md"]);
+    const n = (await call("get_neighbors", { path: "a.md" })).data;
+    expect(n.related.map((r: any) => r.path)).toContain("b.md"); // shares a tag and a link target, but not linked
+    expect(n.related.map((r: any) => r.path)).not.toContain("hub.md");
   });
 });

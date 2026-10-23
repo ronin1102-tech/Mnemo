@@ -23,25 +23,67 @@ export interface HelixLayout {
 const PAD = 60;
 
 /**
- * Vertical time axis: newest notes at the top, oldest at the bottom. Rows are
- * spaced by rank rather than clock time so a burst of notes on one day never
- * overlaps. Strands alternate so the helix reads as two interleaved timelines.
+ * Pick a strand per note so linked notes sit on opposite strands (a link becomes a rung
+ * between the two strands). Most-connected notes are placed first; each later note goes
+ * opposite the strand most of its already-placed neighbours are on. Ties and isolated
+ * notes balance the two strands.
+ */
+export function assignStrands(count: number, edges: [number, number][]): (0 | 1)[] {
+  const adj: number[][] = Array.from({ length: count }, () => []);
+  for (const [a, b] of edges) {
+    adj[a].push(b);
+    adj[b].push(a);
+  }
+  const order = Array.from({ length: count }, (_, i) => i).sort((a, b) => adj[b].length - adj[a].length || a - b);
+  const strand: (0 | 1 | -1)[] = new Array(count).fill(-1);
+  const size = [0, 0];
+  const queued = new Array<boolean>(count).fill(false);
+  // Place a connected component breadth-first from its most-connected note so chains alternate cleanly.
+  for (const start of order) {
+    if (strand[start] !== -1) continue;
+    const queue = [start];
+    queued[start] = true;
+    for (let q = 0; q < queue.length; q++) {
+      const n = queue[q];
+      if (strand[n] === -1) {
+        const votes = [0, 0];
+        for (const m of adj[n]) if (strand[m] !== -1) votes[strand[m] as 0 | 1]++;
+        // opposite the strand holding more of its neighbours; on a tie, the emptier strand
+        strand[n] = votes[0] === votes[1] ? (size[0] <= size[1] ? 0 : 1) : votes[0] > votes[1] ? 1 : 0;
+        size[strand[n] as 0 | 1]++;
+      }
+      for (const m of adj[n].slice().sort((x, y) => adj[y].length - adj[x].length || x - y)) if (!queued[m]) {
+        queued[m] = true;
+        queue.push(m);
+      }
+    }
+  }
+  return strand as (0 | 1)[];
+}
+
+/**
+ * Vertical time axis: newest notes at the top, oldest at the bottom. Rows are spaced by
+ * rank rather than clock time so a burst of notes on one day never overlaps. Strands are
+ * chosen so linked notes face each other across the helix (see assignStrands).
  */
 export function layoutHelix(data: GraphData): HelixLayout {
   const sorted = data.nodes.slice().sort((a, b) => b.mtime - a.mtime || a.path.localeCompare(b.path));
-  const nodes = sorted.map((note, index): HelixNode => ({ note, index, strand: (index % 2) as 0 | 1, y: PAD + index * ROW_GAP }));
-  const byPath = new Map(nodes.map((n) => [n.note.path, n]));
+  const idx = new Map(sorted.map((n, i) => [n.path, i]));
   const seen = new Set<string>();
-  const rungs: [HelixNode, HelixNode][] = [];
+  const pairs: [number, number][] = [];
   for (const l of data.links) {
-    const a = byPath.get(l.src);
-    const b = byPath.get(l.dst);
-    if (!a || !b || a === b) continue;
-    const key = a.index < b.index ? a.index + ":" + b.index : b.index + ":" + a.index;
+    const a = idx.get(l.src);
+    const b = idx.get(l.dst);
+    if (a === undefined || b === undefined || a === b) continue;
+    const key = a < b ? a + ":" + b : b + ":" + a;
     if (seen.has(key)) continue;
     seen.add(key);
-    rungs.push([a, b]);
+    pairs.push([a, b]);
   }
+  const strands = assignStrands(sorted.length, pairs);
+  const nodes = sorted.map((note, index): HelixNode => ({ note, index, strand: strands[index], y: PAD + index * ROW_GAP }));
+  const byPath = new Map(nodes.map((n) => [n.note.path, n]));
+  const rungs = pairs.map(([a, b]): [HelixNode, HelixNode] => [nodes[a], nodes[b]]);
   return { nodes, byPath, rungs, height: PAD * 2 + Math.max(0, nodes.length - 1) * ROW_GAP };
 }
 

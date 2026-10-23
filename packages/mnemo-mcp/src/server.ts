@@ -3,6 +3,7 @@ import { z } from "zod";
 import { Index } from "./indexer.js";
 import { makeLogger } from "./log.js";
 import { ProposalStore, type Proposal } from "./proposals.js";
+import { parseFrontmatter } from "./links.js";
 import { Vault, VaultError } from "./vault.js";
 
 export const DAILY_DIR = "daily";
@@ -54,34 +55,53 @@ export function createServer(vault: Vault, opts: ServerOptions = {}) {
       }) as any,
     );
 
-  tool("search_notes", "Full-text search across the vault (BM25, prefix match on the last word).", {
+  const dateArg = z.string().regex(/^\d{4}-\d{2}-\d{2}/, "ISO date, e.g. 2026-10-23").optional();
+  const ms = (d?: string, endOfDay = false) => (d ? Date.parse(d) + (endOfDay && d.length === 10 ? 86_399_999 : 0) : undefined);
+
+  tool("search_notes", "Full-text search (BM25 over title, tags, body; prefix match on the last word). Optional folder, tag and modified-date filters.", {
     query: z.string().min(1),
     limit: z.number().int().min(1).max(50).default(10),
-  }, ({ query, limit }) => index.search(query, limit));
-
-  tool("read_note", "Read a note by vault-relative path.", { path: z.string() }, ({ path }) => {
-    const rel = vault.normalize(path);
-    return { path: rel, content: vault.read(rel) };
+    folder: z.string().optional(),
+    tag: z.string().optional(),
+    after: dateArg,
+    before: dateArg,
+  }, ({ query, limit, folder, tag, after, before }) => {
+    if (folder) vault.normalize(folder.replace(/\/+$/, "") + "/x.md");
+    return index.search(query, limit, { folder, tag, after: ms(after), before: ms(before, true) });
   });
 
-  tool("list_recent", "Most recently modified notes.", { limit: z.number().int().min(1).max(100).default(10) }, ({ limit }) =>
+  tool("read_note", "Read a note: content, parsed frontmatter, outgoing links and backlinks.", { path: z.string() }, ({ path }) => {
+    const rel = vault.normalize(path);
+    const content = vault.read(rel);
+    const n = index.neighbors(rel, 1);
+    return {
+      path: rel,
+      content,
+      frontmatter: parseFrontmatter(content).fm,
+      outgoing: n?.outgoing.map((o) => o.path) ?? [],
+      unresolvedLinks: n?.unresolved ?? [],
+      backlinks: index.backlinks(rel),
+    };
+  });
+
+  tool("list_recent", "Most recently modified notes (default 20).", { limit: z.number().int().min(1).max(100).default(20) }, ({ limit }) =>
     index.recent(limit),
   );
 
-  tool("list_notes", "List notes, optionally within a folder.", {
+  tool("list_notes", "Browse a folder: sub-folders with note counts, and the notes under it.", {
     folder: z.string().default(""),
     limit: z.number().int().min(1).max(500).default(200),
     offset: z.number().int().min(0).default(0),
   }, ({ folder, limit, offset }) => {
     if (folder) vault.normalize(folder.replace(/\/+$/, "") + "/x.md");
-    return index.list(folder, limit, offset);
+    return { folders: index.folders(folder), notes: index.list(folder, limit, offset) };
   });
 
-  tool("get_backlinks", "Notes that link to the given note via [[wikilinks]].", { path: z.string() }, ({ path }) =>
+  tool("get_backlinks", "Notes that link to the given note, each with the line containing the link.", { path: z.string() }, ({ path }) =>
     index.backlinks(vault.normalize(path)),
   );
 
-  tool("daily_note", `Today's (or a given date's) daily note at ${DAILY_DIR}/YYYY-MM-DD.md. Read-only: use propose_write to create it.`, {
+  tool("daily_note", `Today's (or a given date's) daily note at ${DAILY_DIR}/YYYY-MM-DD.md. Read-only: use write_note to create it.`, {
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   }, ({ date }) => {
     const d = date ?? localDate();
@@ -89,7 +109,7 @@ export function createServer(vault: Vault, opts: ServerOptions = {}) {
     return vault.exists(rel) ? { path: rel, exists: true, content: vault.read(rel) } : { path: rel, exists: false, content: null };
   });
 
-  tool("get_neighbors", "Link neighbourhood of a note: outgoing, incoming and unresolved links, plus nodes/edges out to `depth` hops.", {
+  tool("get_neighbors", "Graph around a note: outgoing, incoming and unresolved links, unlinked `related` notes (shared links/tags), plus nodes/edges out to `depth` hops.", {
     path: z.string(),
     depth: z.number().int().min(1).max(3).default(1),
   }, ({ path, depth }) => {

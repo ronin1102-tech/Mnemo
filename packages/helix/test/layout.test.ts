@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ROW_GAP, layoutGraph, layoutHelix, strandX, visibleRange } from "../src/layout";
+import { ROW_GAP, assignStrands, layoutGraph, layoutHelix, strandX, visibleRange } from "../src/layout";
 import type { GraphData } from "../src/types";
 
 const note = (path: string, mtime: number) => ({ path, title: path, mtime, tags: [] });
@@ -22,7 +22,18 @@ describe("helix layout", () => {
     expect(l.nodes[0].y).toBeLessThan(l.nodes[2].y);
     expect(l.nodes[1].y - l.nodes[0].y).toBe(ROW_GAP);
   });
-  it("alternates strands", () => expect(l.nodes.map((n) => n.strand)).toEqual([0, 1, 0]));
+  it("linked notes sit on opposite strands", () => {
+    const strandOf = (p: string) => l.byPath.get(p)!.strand;
+    expect(strandOf("new.md")).not.toBe(strandOf("old.md"));
+  });
+  it("chains alternate and unlinked notes balance the strands", () => {
+    const chain = assignStrands(6, [[0, 1], [1, 2], [2, 3], [3, 4], [4, 5]]);
+    expect(chain.every((s, i) => i === 0 || s !== chain[i - 1])).toBe(true);
+    const lone = assignStrands(10, []);
+    expect(lone.filter((s) => s === 0).length).toBe(5);
+    const star = assignStrands(5, [[0, 1], [0, 2], [0, 3], [0, 4]]);
+    expect(star.slice(1).every((s) => s !== star[0])).toBe(true);
+  });
   it("keeps one rung per linked pair, dropping dangling and self links", () => {
     expect(l.rungs).toHaveLength(1);
     expect(l.rungs[0].map((n) => n.note.path).sort()).toEqual(["new.md", "old.md"]);
@@ -44,5 +55,16 @@ describe("graph layout", () => {
     expect(a.size).toBe(3);
     expect(a.get("new.md")).toEqual(b.get("new.md"));
     expect(Number.isFinite(a.get("old.md")!.x)).toBe(true);
+  });
+});
+
+describe("layout at scale", () => {
+  it("lays out 10,000 notes / 40,000 links well under a second", () => {
+    const nodes = Array.from({ length: 10000 }, (_, i) => note(`n${i}.md`, i));
+    const links = Array.from({ length: 40000 }, (_, i) => ({ src: `n${i % 10000}.md`, dst: `n${(i * 7919 + 13) % 10000}.md` }));
+    const t = Date.now();
+    const l = layoutHelix({ generatedAt: "", nodes, links, proposals: [] });
+    expect(Date.now() - t).toBeLessThan(1000);
+    expect(l.nodes).toHaveLength(10000);
   });
 });

@@ -21,7 +21,7 @@ node packages/mnemo-mcp/dist/cli.js --vault ~/notes serve
 
 MCP client config: `{"command":"node","args":[".../dist/cli.js","--vault","/path/to/vault","serve"]}`.
 
-**Read tools:** `search_notes` (SQLite FTS5), `read_note`, `list_recent`, `list_notes`, `get_backlinks`, `get_neighbors` (links in/out, unresolved, N-hop nodes and edges), `find_similar` (structural: shared outgoing links, shared linkers, shared tags, direct link, folder; returns a 0..1 score and reasons), `get_tags`, `daily_note` (read-only; `daily/YYYY-MM-DD.md`), `list_proposals`.
+**Read tools:** `search_notes` (FTS5 BM25 over title, tags and body; filters `folder`, `tag`, `after`, `before`), `read_note` (content, parsed frontmatter, outgoing links, backlinks), `list_recent`, `list_notes` (sub-folders with counts), `get_backlinks` (with the linking line), `get_neighbors` (links in/out, unresolved, unlinked `related` notes, N-hop nodes and edges), `find_similar` (structural: shared outgoing links, shared linkers, shared tags, direct link, folder; returns a 0..1 score and reasons), `get_tags`, `daily_note` (read-only; `daily/YYYY-MM-DD.md`), `list_proposals`.
 **Write tools (all gated, none touch a note):** `write_note`, `append_note`, `patch_note` (the anchor must match exactly once; zero or several matches fail closed), `move_note` (inbound `[[wikilinks]]` are rewritten in the same proposal), `delete_note`.
 `serve --read-only` (or `MNEMO_READ_ONLY=1`) registers no write tools at all.
 
@@ -43,6 +43,8 @@ mnemo-ctl --vault V list [status] | show <id> | approve <id> | reject <id> | rei
 
 `--read-only` makes `approve`, `reject` and `purge-trash` refuse. Note: this is a convention for the human operator, not a sandbox. An agent that is also given a shell can run `mnemo-ctl` itself, so don't give the same agent both.
 
+**Vault conventions:** optional YAML frontmatter (`title`, `created`, `tags` as `[a, b]`, `a, b` or a `- a` list) is read and never rewritten; inline `#tags` also count. Edges are `[[wikilinks]]` and relative `[text](note.md)` links. `move_note` rewrites both kinds in other notes. Links *inside the moved note itself* are not re-based if it changes directory. Notes over 10 MB are readable but not patchable.
+
 ## Budgets (`npm --prefix packages/mnemo-mcp run bench`, 10,000 notes)
 
 | Budget | Target | Measured |
@@ -61,7 +63,7 @@ node packages/mnemo-mcp/dist/ctl.js --vault ~/notes export-graph --out packages/
 open packages/helix/dist/index.html
 ```
 
-Without `graph.js` it shows demo data. Views: **Emblem** (collapsed mark, Enter/click to open), **Helix** (newest at top, oldest at bottom; each `[[wikilink]]` is a rung between its two notes), **Graph** (read-only). The strand list beside the canvas is the accessible equivalent, and arrow keys move between notes. Rows are spaced by rank, not wall-clock time, so bursts of notes never overlap.
+Without `graph.js` it shows demo data. Views: **Emblem** (collapsed mark, Enter/click to open), **Helix** (newest at top, oldest at bottom; each link is a rung, and notes are placed on the strand opposite their links), **Graph** (read-only). The strand list beside the canvas is the accessible equivalent, and arrow keys move between notes. Rows are spaced by rank, not wall-clock time, so bursts of notes never overlap.
 
 **Colour:** gold marks agent proposals only. A test fails if gold is used anywhere else.
 
