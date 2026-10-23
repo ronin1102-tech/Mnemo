@@ -1,0 +1,32 @@
+:root { --bg:#0d1117; --panel:#161b22; --line:#30363d; --text:#e6edf3; --muted:#8b949e; --accent:#5eead4; --gold:#e0a526; }
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+body { display: flex; flex-direction: column; }
+header { display: flex; align-items: center; padding: 8px 14px; border-bottom: 1px solid var(--line); }
+header > * { margin-right: 14px; }
+h1 { font-size: 16px; margin: 0 14px 0 0; letter-spacing: .08em; }
+nav button { background: var(--panel); color: var(--text); border: 1px solid var(--line); padding: 4px 12px; margin-right: 4px; border-radius: 6px; cursor: pointer; }
+nav button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+#source { color: var(--muted); font-size: 12px; }
+main { flex: 1; display: flex; min-height: 0; }
+#stage { flex: 1; min-width: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+aside { width: 300px; border-left: 1px solid var(--line); background: var(--panel); overflow-y: auto; }
+aside h2 { font-size: 13px; margin: 0; padding: 10px 12px; position: sticky; top: 0; background: var(--panel); border-bottom: 1px solid var(--line); }
+aside h2 small { color: var(--muted); font-weight: normal; margin-left: 6px; }
+ul { list-style: none; margin: 0; padding: 0; }
+#strand-list button { display: flex; width: 100%; text-align: left; background: none; border: 0; border-bottom: 1px solid var(--line); color: var(--text); padding: 7px 12px; cursor: pointer; font: inherit; }
+#strand-list button > span:first-child { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#strand-list .meta { color: var(--muted); margin-left: 8px; }
+#strand-list button[aria-current="true"] { background: #1f2630; box-shadow: inset 3px 0 0 #fff; }
+button:focus, canvas:focus { outline: 2px solid #fff; outline-offset: -2px; }
+#detail { border-top: 2px solid var(--line); padding: 12px; }
+#detail h2 { position: static; border: 0; padding: 0; font-size: 15px; }
+#detail h3 { font-size: 12px; color: var(--muted); margin: 12px 0 4px; }
+#detail .path, #detail .tags { color: var(--muted); margin: 4px 0; font-size: 12px; }
+.linkbtn { background: none; border: 0; color: var(--accent); cursor: pointer; padding: 2px 0; font: inherit; text-align: left; }
+/* Gold: agent proposals only. */
+.proposal { color: var(--gold); }
+.badge.proposal { border: 1px solid var(--gold); border-radius: 8px; font-size: 10px; padding: 0 6px; margin-left: 8px; align-self: center; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+@media (max-width: 700px) { main { flex-direction: column; } aside { width: 100%; height: 40%; border-left: 0; border-top: 1px solid var(--line); } }

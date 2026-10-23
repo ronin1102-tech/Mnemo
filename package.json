@@ -1,0 +1,9 @@
+{
+  "name": "mnemo",
+  "private": true,
+  "scripts": {
+    "install:all": "npm --prefix packages/mnemo-mcp install && npm --prefix packages/helix install",
+    "build": "npm --prefix packages/mnemo-mcp run build && npm --prefix packages/helix run build",
+    "test": "npm --prefix packages/mnemo-mcp test && npm --prefix packages/helix test"
+  }
+}

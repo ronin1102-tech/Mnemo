@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mnemo Helix</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>Mnemo</h1>
+  <nav aria-label="View">
+    <button type="button" data-mode="emblem" aria-pressed="true">Emblem</button>
+    <button type="button" data-mode="helix" aria-pressed="false">Helix</button>
+    <button type="button" data-mode="graph" aria-pressed="false">Graph</button>
+  </nav>
+  <span id="source"></span>
+</header>
+<main>
+  <canvas id="stage" tabindex="0" role="application" aria-label="Mnemo emblem. Press Enter to open the helix."></canvas>
+  <aside>
+    <section aria-labelledby="list-h">
+      <h2 id="list-h">Strand list <small>newest first</small></h2>
+      <ul id="strand-list"></ul>
+    </section>
+    <section id="detail" aria-live="off" hidden></section>
+  </aside>
+</main>
+<div id="live" class="sr" role="status" aria-live="polite"></div>
+<script src="graph.js" onerror="void 0"></script>
+<script src="app.js"></script>
+</body>
+</html>
