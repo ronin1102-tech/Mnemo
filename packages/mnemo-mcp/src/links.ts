@@ -36,6 +36,14 @@ export function parseFrontmatter(text: string): { fm: Frontmatter; body: string;
   return { fm, body: text.slice(m[0].length), hasFrontmatter: true };
 }
 
+/** Frontmatter `created` as epoch ms, or null if absent or unparseable. */
+export function extractCreated(text: string): number | null {
+  const c = parseFrontmatter(text).fm.created;
+  if (!c) return null;
+  const t = Date.parse(c);
+  return Number.isNaN(t) ? null : t;
+}
+
 /** Frontmatter title, else first `# heading`, else the file name. */
 export function extractTitle(text: string, rel: string): string {
   const { fm, body } = parseFrontmatter(text);

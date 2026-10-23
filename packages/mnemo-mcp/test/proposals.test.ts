@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { PROPOSAL_TTL_MS, ProposalStore } from "../src/proposals.js";
@@ -131,5 +132,22 @@ describe("write gate", () => {
     const { root, store } = setup({ "big.md": "needle " + "x".repeat(10_000_001) });
     expect(() => store.proposePatch("big.md", "needle", "y", "c")).toThrow(/10MB/);
     expect(fs.readdirSync(path.join(root, ".mnemo/proposals"))).toHaveLength(0);
+  });
+
+  it("records who settled: actor + OS username + timestamp (approve, reject, stale, expiry)", () => {
+    const { root, store, clock } = setup();
+    const who = { actor: "mnemo-ctl", user: os.userInfo().username };
+    const ok = store.approve(store.proposeWrite("a.md", "x", "agent-1").id);
+    expect(ok.settledBy).toEqual(who);
+    expect(ok.client).toBe("agent-1"); // proposer stays distinct from the settler
+    expect(ok.resolvedAt).toBeTruthy();
+    expect(store.reject(store.proposeWrite("b.md", "y", "agent-2").id).settledBy).toEqual(who);
+    const st = store.proposeWrite("a.md", "z", "agent-3");
+    fs.writeFileSync(path.join(root, "a.md"), "edited");
+    expect(() => store.approve(st.id)).toThrow(/stale/);
+    expect(store.get(st.id).settledBy).toEqual(who);
+    const ex = store.proposeWrite("c.md", "q", "agent-4");
+    clock.advance(PROPOSAL_TTL_MS + 1000);
+    expect(store.get(ex.id).settledBy).toEqual({ actor: "expiry" });
   });
 });

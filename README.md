@@ -31,6 +31,7 @@ Safety model:
 - **Write gate:** an agent write saves a proposal (diff, client name, timestamp) to `.mnemo/proposals/`. There is no approve tool over MCP and no bypass flag.
 - **Stale halt:** every note a proposal depends on is hash-checked at approval. If any changed (or a move's destination now exists), the proposal becomes `stale`, nothing is applied, and the agent must re-propose.
 - **Atomic writes:** temp file in the same directory, `fsync`, `rename`, then `fsync` of the directory.
+- **Audit:** every settled proposal records `settledBy` (actor `mnemo-ctl` plus the OS username, or actor `expiry`) and `resolvedAt`, alongside the proposing `client`. There is no user system; proposer-versus-settler is the point.
 - **Expiry:** pending proposals expire after 7 days.
 - **Deletion:** an approved agent delete moves the note to `.mnemo/trash/`. Only `mnemo-ctl purge-trash` destroys files.
 - The SQLite index and logs live in `.mnemo/`; the index is a cache and rebuilds itself.
@@ -63,10 +64,15 @@ node packages/mnemo-mcp/dist/ctl.js --vault ~/notes export-graph --out packages/
 open packages/helix/dist/index.html
 ```
 
-Without `graph.js` it shows demo data. Views: **Emblem** (collapsed mark, Enter/click to open), **Helix** (newest at top, oldest at bottom; each link is a rung, and notes are placed on the strand opposite their links), **Graph** (read-only). The strand list beside the canvas is the accessible equivalent, and arrow keys move between notes. Rows are spaced by rank, not wall-clock time, so bursts of notes never overlap.
+Without `graph.js` it shows demo data. Palette is the mark's: deep navy, water-blue strands, blue-white nodes.
 
-**Colour:** gold marks agent proposals only. A test fails if gold is used anywhere else.
+- **Emblem mode:** the mark itself (gold ring, coil rising from the pool, gold beads). Opening the helix plays the ~1.2 s **rising transition** once per page load: the coil climbs out of the water and nodes light from the bottom up. Any key or click skips it; `prefers-reduced-motion` gets a short crossfade only.
+- **Helix mode:** time is the vertical axis, newest at the top, oldest at the bottom, where the coil narrows into **the spring** (the pool; click it to clear focus and return to the newest end). Position is measured from the spring, so adding notes only extends the coil upward and never moves existing nodes. A note's time is frontmatter `created` when present, else modified time. Rows are spaced by rank, not clock time.
+- **Strands are link partners:** notes are placed oldest-first, each on the strand opposite its strongest already-placed link partner (most shared neighbours, then most recent), so links become rungs. Existing placements never change when newer notes arrive.
+- **Focus:** click a node (or use the strand list / arrow keys) to centre it, brighten its rungs and dim everything outside 1, 2 or 3 link-hops. The card shows title, excerpt, tags, backlink count and links. Esc clears focus, a second Esc returns to the emblem.
+- **Graph mode** (read-only) and the **strand list** (a keyboard- and screen-reader-complete twin of the same data) are also available.
+- **Colour:** gold marks agent proposals only. The emblem's own gold (`markGold`) is a branding surface, used only inside the emblem renderer; tests enforce both rules.
 
 ## Not in V1 (planned V1.1)
 
-Similarity arcs and Structural Similarity, the gold proposal pulse with in-view approval, strand filters, tag tints. The packaged standalone app shell (e.g. Electron/Tauri) is also not built yet; today the UI is a static page.
+Similarity arcs in the UI, the gold proposal pulse with in-view approval, strand filters, tag tints, spatial search lighting, re-basing relative links inside a moved note, a journal/resume for multi-file moves. The packaged standalone app shell (e.g. Electron/Tauri) is also not built yet; today the UI is a static page.

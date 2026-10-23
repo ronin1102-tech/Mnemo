@@ -163,4 +163,18 @@ describe("mnemo mcp server", () => {
     expect(n.related.map((r: any) => r.path)).toContain("b.md"); // shares a tag and a link target, but not linked
     expect(n.related.map((r: any) => r.path)).not.toContain("hub.md");
   });
+
+  it("date filters use frontmatter created, falling back to mtime", async () => {
+    const { root, call } = await connect({
+      "old-created.md": "---\ncreated: 2019-05-01\n---\nquince",
+      "no-created.md": "quince",
+      "bad-created.md": "---\ncreated: not a date\n---\nquince",
+    });
+    // all three were just written (mtime = now); only the frontmatter one is "old"
+    const hits = async (a: Record<string, unknown>) => (await call("search_notes", { query: "quince", ...a })).data.map((h: any) => h.path).sort();
+    expect(await hits({ before: "2020-01-01" })).toEqual(["old-created.md"]);
+    expect(await hits({ after: "2020-01-01" })).toEqual(["bad-created.md", "no-created.md"]);
+    fs.utimesSync(path.join(root, "no-created.md"), new Date("2018-01-01"), new Date("2018-01-01"));
+    expect(await hits({ before: "2020-01-01" })).toEqual(["no-created.md", "old-created.md"]);
+  });
 });

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { Vault } from "./vault.js";
-import { extractLinks, extractTags, extractTitle, makeResolver, parseFrontmatter } from "./links.js";
+import { extractCreated, extractLinks, extractTags, extractTitle, makeResolver, parseFrontmatter } from "./links.js";
 
 interface KnownNote {
   id: number;
@@ -14,6 +14,8 @@ export interface NoteMeta {
   title: string;
   mtime: number;
   tags: string[];
+  /** Frontmatter `created` (epoch ms) when present. */
+  created: number | null;
 }
 export interface SearchHit extends NoteMeta {
   snippet: string;
@@ -28,13 +30,13 @@ export class Index {
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("synchronous = NORMAL"); // the index is a rebuildable cache
     this.db.pragma("cache_size = -4096");
-    // Schema v3: FTS rowid == notes.id so updates never scan the FTS table.
-    if ((this.db.pragma("user_version", { simple: true }) as number) !== 3) {
+    // Schema v4: FTS rowid == notes.id so updates never scan the FTS table.
+    if ((this.db.pragma("user_version", { simple: true }) as number) !== 4) {
       this.db.exec("DROP TABLE IF EXISTS notes; DROP TABLE IF EXISTS notes_fts; DROP TABLE IF EXISTS links;");
-      this.db.pragma("user_version = 3");
+      this.db.pragma("user_version = 4");
     }
     this.db.exec(`
-      CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, path TEXT UNIQUE, title TEXT, mtime REAL, size INTEGER, tags TEXT);
+      CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, path TEXT UNIQUE, title TEXT, mtime REAL, size INTEGER, tags TEXT, created REAL);
       CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(title, tags, body, tokenize='porter unicode61');
       CREATE TABLE IF NOT EXISTS links(src TEXT, target TEXT, kind TEXT, ctx TEXT, resolved TEXT);
       CREATE INDEX IF NOT EXISTS links_src ON links(src);
@@ -83,7 +85,7 @@ export class Index {
     const delFts = this.db.prepare("DELETE FROM notes_fts WHERE rowid=?");
     const delNote = this.db.prepare("DELETE FROM notes WHERE id=?");
     const delLinks = this.db.prepare("DELETE FROM links WHERE src=?");
-    const insNote = this.db.prepare("INSERT INTO notes(path,title,mtime,size,tags) VALUES(?,?,?,?,?)");
+    const insNote = this.db.prepare("INSERT INTO notes(path,title,mtime,size,tags,created) VALUES(?,?,?,?,?,?)");
     const insFts = this.db.prepare("INSERT INTO notes_fts(rowid,title,tags,body) VALUES(?,?,?,?)");
     const insLink = this.db.prepare("INSERT INTO links(src,target,kind,ctx,resolved) VALUES(?,?,?,?,NULL)");
     const drop = (rel: string) => {
@@ -102,7 +104,7 @@ export class Index {
         const body = fs.readFileSync(path.join(this.vault.root, ...rel.split("/")), "utf8");
         const title = extractTitle(body, rel);
         const tags = extractTags(body);
-        const id = insNote.run(rel, title, st.mtimeMs, st.size, tags.join(",")).lastInsertRowid as number;
+        const id = insNote.run(rel, title, st.mtimeMs, st.size, tags.join(","), extractCreated(body)).lastInsertRowid as number;
         known.set(rel, { id, mtime: st.mtimeMs, size: st.size });
         insFts.run(id, title, tags.join(" "), parseFrontmatter(body).body);
         for (const l of extractLinks(parseFrontmatter(body).body, rel)) insLink.run(rel, l.target, l.kind, l.context);
@@ -121,8 +123,8 @@ export class Index {
     this.dataVersion = this.db.pragma("data_version", { simple: true }) as number;
   }
 
-  private meta(r: { path: string; title: string; mtime: number; tags: string }): NoteMeta {
-    return { path: r.path, title: r.title, mtime: r.mtime, tags: r.tags ? r.tags.split(",") : [] };
+  private meta(r: { path: string; title: string; mtime: number; tags: string; created?: number | null }): NoteMeta {
+    return { path: r.path, title: r.title, mtime: r.mtime, tags: r.tags ? r.tags.split(",") : [], created: r.created ?? null };
   }
 
   search(query: string, limit = 10, f: { folder?: string; tag?: string; after?: number; before?: number } = {}): SearchHit[] {
@@ -140,11 +142,11 @@ export class Index {
       where.push("(',' || n.tags || ',') LIKE ? ESCAPE '\\'");
       args.push(`%,${esc(f.tag.replace(/^#/, "").toLowerCase())},%`);
     }
-    if (f.after !== undefined) { where.push("n.mtime >= ?"); args.push(f.after); }
-    if (f.before !== undefined) { where.push("n.mtime <= ?"); args.push(f.before); }
+    if (f.after !== undefined) { where.push("COALESCE(n.created, n.mtime) >= ?"); args.push(f.after); }
+    if (f.before !== undefined) { where.push("COALESCE(n.created, n.mtime) <= ?"); args.push(f.before); }
     const rows = this.db
       .prepare(
-        `SELECT n.path, n.title, n.mtime, n.tags, snippet(notes_fts, 2, '[', ']', '…', 12) AS snippet
+        `SELECT n.path, n.title, n.mtime, n.tags, n.created, snippet(notes_fts, 2, '[', ']', '…', 12) AS snippet
          FROM notes_fts JOIN notes n ON n.id = notes_fts.rowid
          WHERE ${where.join(" AND ")} ORDER BY bm25(notes_fts, 5.0, 3.0, 1.0) LIMIT ?`,
       )

@@ -1,8 +1,8 @@
 import { COLORS } from "./colors";
 import { demoData } from "./demo";
-import { layoutGraph, layoutHelix, ROW_GAP } from "./layout";
+import { layoutGraph, layoutHelix, ROW_GAP, timeOf, withinHops } from "./layout";
 import type { GraphPoint, HelixLayout } from "./layout";
-import { drawEmblem, drawGraph, drawHelix, graphToScreen, helixPos } from "./render";
+import { drawEmblem, drawGraph, drawHelix, graphToScreen, helixPos, poolHit } from "./render";
 import type { GraphView } from "./render";
 import type { GraphData } from "./types";
 
@@ -39,6 +39,10 @@ const reduceMotion = !!(window.matchMedia && window.matchMedia("(prefers-reduced
 let mode: Mode = "emblem";
 let emb = 0; // 0 = emblem, 1 = full view; animated
 let embTarget = 0;
+let embMs = 250; // duration of the current emblem <-> view transition
+let rising = false; // the 1.2s rising transition (plays once per vault open)
+let risePlayed = false;
+let depth = 1; // focus hop depth, 1-3
 let scrollY = 0;
 let selected: string | null = null;
 let hover: string | null = null;
@@ -76,8 +80,9 @@ function frame(t: number) {
   lastT = t;
   let animating = false;
   if (emb !== embTarget) {
-    emb = reduceMotion ? embTarget : emb + Math.sign(embTarget - emb) * Math.min(Math.abs(embTarget - emb), dt / 450);
+    emb += Math.sign(embTarget - emb) * Math.min(Math.abs(embTarget - emb), dt / embMs);
     animating = emb !== embTarget;
+    if (!animating) rising = false;
   }
   draw();
   dirty = false;
@@ -86,22 +91,26 @@ function frame(t: number) {
 }
 
 function neighbours(): Set<string> {
-  return selected ? adj.get(selected) || EMPTY : EMPTY;
+  return selected ? withinHops(adj, selected, depth) : EMPTY;
 }
+
+/** Ease-out for the rise. */
+const easeOut = (t: number) => 1 - Math.pow(1 - t, 3);
 
 function draw() {
   ctx.globalAlpha = 1;
   ctx.fillStyle = COLORS.bg;
   ctx.fillRect(0, 0, view.w, view.h);
-  if (emb < 1) drawEmblem(ctx, view, 1 + emb * 0.6, 1 - emb);
+  if (emb < 1) drawEmblem(ctx, view, 1 + emb * 0.12, 1 - Math.min(1, emb * 1.6));
   if (emb > 0) {
-    ctx.globalAlpha = emb;
     if (mode === "graph") {
+      ctx.globalAlpha = emb;
       drawGraph(ctx, view, { pts: graphPts, links: data.links, titles, selected, hover, proposed, neighbours: neighbours(), gv });
+      ctx.globalAlpha = 1;
     } else {
-      drawHelix(ctx, view, { layout, scrollY, selected, hover, proposed, neighbours: neighbours() });
+      const reveal = rising ? easeOut(emb) : 1;
+      drawHelix(ctx, view, { layout, scrollY, selected, hover, proposed, neighbours: neighbours(), reveal, alpha: rising ? 1 : emb });
     }
-    ctx.globalAlpha = 1;
   }
 }
 
@@ -110,6 +119,11 @@ function draw() {
 function setMode(m: Mode) {
   mode = m;
   embTarget = m === "emblem" ? 0 : 1;
+  // The rise plays once, when the vault is first opened; later switches are a quick crossfade.
+  // prefers-reduced-motion: crossfade only.
+  rising = m === "helix" && !risePlayed && !reduceMotion && emb < 1;
+  if (m !== "emblem") risePlayed = true;
+  embMs = rising ? 1200 : 250;
   for (const b of document.querySelectorAll<HTMLButtonElement>("[data-mode]")) b.setAttribute("aria-pressed", String(b.dataset.mode === m));
   canvas.setAttribute("aria-label", canvasLabel());
   if (m === "emblem") hideDetail();
@@ -157,12 +171,35 @@ function showDetail(path: string) {
   const h = document.createElement("h2");
   h.textContent = note.title;
   detailEl.appendChild(h);
-  detailEl.appendChild(el("p", "path", note.path + " · " + new Date(note.mtime).toISOString().slice(0, 10)));
+  detailEl.appendChild(el("p", "path", note.path + " · " + new Date(timeOf(note)).toISOString().slice(0, 10) + " · " + inn.length + " backlink" + (inn.length === 1 ? "" : "s")));
+  if (note.excerpt) detailEl.appendChild(el("p", "excerpt", note.excerpt));
   if (note.tags.length) detailEl.appendChild(el("p", "tags", note.tags.map((t) => "#" + t).join(" ")));
   for (const p of props) detailEl.appendChild(el("p", "proposal", `Pending ${p.op} proposal from ${p.client}. Review with: mnemo-ctl show ${p.id}`));
+  detailEl.appendChild(depthControl(path));
   detailEl.appendChild(linkGroup("Links to", out));
   detailEl.appendChild(linkGroup("Linked from", inn));
   liveEl.textContent = `Selected ${note.title}. ${out.length} outgoing, ${inn.length} incoming links.`;
+}
+
+/** Focus depth: how many link-hops stay lit around the selection. */
+function depthControl(path: string) {
+  const wrap = document.createElement("div");
+  wrap.className = "depth";
+  wrap.appendChild(el("span", "", "Depth"));
+  for (const n of [1, 2, 3]) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = String(n);
+    b.setAttribute("aria-pressed", String(n === depth));
+    b.setAttribute("aria-label", `Show ${n} link hop${n > 1 ? "s" : ""}`);
+    b.addEventListener("click", () => {
+      depth = n;
+      showDetail(path);
+      request();
+    });
+    wrap.appendChild(b);
+  }
+  return wrap;
 }
 
 function hideDetail() {
@@ -206,7 +243,7 @@ function buildList() {
     b.dataset.path = n.note.path;
     const deg = (adj.get(n.note.path) || EMPTY).size;
     const prop = proposed.has(n.note.path);
-    b.setAttribute("aria-label", `${n.note.title}, ${new Date(n.note.mtime).toISOString().slice(0, 10)}, ${deg} links${prop ? ", has a pending agent proposal" : ""}`);
+    b.setAttribute("aria-label", `${n.note.title}, ${new Date(timeOf(n.note)).toISOString().slice(0, 10)}, ${deg} links${prop ? ", has a pending agent proposal" : ""}`);
     const t = document.createElement("span");
     t.textContent = n.note.title;
     b.appendChild(t);
@@ -251,7 +288,18 @@ function pick(px: number, py: number): string | null {
 
 let drag: { x: number; y: number; moved: boolean } | null = null;
 
+/** The rise is a layer, never a gate: any key or click skips it. */
+function skipRise() {
+  if (rising && emb !== embTarget) {
+    emb = embTarget;
+    rising = false;
+    request();
+  }
+}
+document.addEventListener("keydown", skipRise, true);
+
 canvas.addEventListener("pointerdown", (e) => {
+  skipRise();
   drag = { x: e.clientX, y: e.clientY, moved: false };
   try { canvas.setPointerCapture(e.pointerId); } catch (_) { /* older engines */ }
 });
@@ -277,7 +325,16 @@ canvas.addEventListener("pointerup", (e) => {
   if (wasDrag) return;
   if (mode === "emblem") return setMode("helix");
   const r = canvas.getBoundingClientRect();
-  select(pick(e.clientX - r.left, e.clientY - r.top), false);
+  const px = e.clientX - r.left;
+  const py = e.clientY - r.top;
+  const hit = pick(px, py);
+  if (!hit && mode === "helix" && poolHit(view, layout, scrollY, px, py)) {
+    // the water is the root: back to the whole-vault view
+    select(null);
+    scrollY = 0;
+    return request();
+  }
+  select(hit, false);
 });
 canvas.addEventListener("pointerleave", () => { if (hover) { hover = null; request(); } });
 canvas.addEventListener("wheel", (e) => {
@@ -293,7 +350,11 @@ canvas.addEventListener("keydown", (e) => {
     if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setMode("helix"); }
     return;
   }
-  if (e.key === "Escape") { select(null); setMode("emblem"); return; }
+  if (e.key === "Escape") {
+    if (selected) select(null);
+    else setMode("emblem");
+    return;
+  }
   const i = selected && layout.byPath.get(selected) ? layout.byPath.get(selected)!.index : -1;
   let next = -2;
   if (e.key === "ArrowDown" || e.key === "ArrowRight") next = Math.min(layout.nodes.length - 1, i + 1); // older

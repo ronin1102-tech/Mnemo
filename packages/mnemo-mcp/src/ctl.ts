@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import path from "node:path";
-import { Index } from "./indexer.js";
+import { Index, type NoteMeta } from "./indexer.js";
+import { parseFrontmatter } from "./links.js";
 import { ProposalStore, type ProposalStatus } from "./proposals.js";
 import { Vault, VaultError } from "./vault.js";
 
@@ -17,6 +18,13 @@ const USAGE = `mnemo-ctl [--vault <dir>] [--read-only] <command>      (human-onl
 
 --read-only refuses approve, reject and purge-trash.
 `;
+
+/** First ~160 characters of the body, without frontmatter or the leading heading. */
+function excerpt(text: string): string {
+  const body = parseFrontmatter(text).body.replace(/^\s*#\s+.*\n?/, "");
+  const flat = body.replace(/\[\[([^\]|#]*)[^\]]*\]\]/g, "$1").replace(/[#*_`>]/g, "").replace(/\s+/g, " ").trim();
+  return flat.length > 160 ? flat.slice(0, 159) + "…" : flat;
+}
 
 function main(argv: string[]) {
   let vaultDir = process.env.MNEMO_VAULT;
@@ -49,7 +57,7 @@ function main(argv: string[]) {
       return;
     case "show": {
       const p = store.get(id());
-      return out(`${p.id} ${p.status} ${p.op} ${p.path}${p.to ? " -> " + p.to : ""}\nclient: ${p.client}\ncreated: ${p.createdAt}\nexpires: ${p.expiresAt}\ntouches: ${p.changes.map((c) => c.path).join(", ")}\n\n${p.diff}`);
+      return out(`${p.id} ${p.status} ${p.op} ${p.path}${p.to ? " -> " + p.to : ""}\nclient: ${p.client}\nproposed by: ${p.client} at ${p.createdAt}\nexpires: ${p.expiresAt}\n${p.settledBy ? `settled: ${p.status} by ${p.settledBy.actor}${p.settledBy.user ? " (" + p.settledBy.user + ")" : ""} at ${p.resolvedAt}\n` : ""}touches: ${p.changes.map((c) => c.path).join(", ")}\n\n${p.diff}`);
     }
     case "approve":
       return out(`approved ${store.approve(id()).op} ${store.get(id()).path}`);
@@ -66,8 +74,10 @@ function main(argv: string[]) {
     case "export-graph": {
       const index = new Index(vault);
       index.sync();
+      const graph = index.graph();
+      for (const n of graph.nodes as (NoteMeta & { excerpt?: string })[]) n.excerpt = excerpt(vault.read(n.path));
       const pending = store.list("pending").map((p) => ({ id: p.id, path: p.path, op: p.op, client: p.client }));
-      const json = JSON.stringify({ generatedAt: new Date().toISOString(), ...index.graph(), proposals: pending });
+      const json = JSON.stringify({ generatedAt: new Date().toISOString(), ...graph, proposals: pending });
       index.close();
       if (outFile) fs.writeFileSync(outFile, `window.__MNEMO_GRAPH__ = ${json};\n`);
       else out(json);

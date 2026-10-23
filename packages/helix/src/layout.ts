@@ -4,12 +4,18 @@ export const ROW_GAP = 36;
 export const RADIUS = 70;
 /** Rows per full helix turn. */
 export const TURN_ROWS = 10;
+/** Height reserved under the oldest note for the spring (the pool the coil rises out of). */
+export const POOL_H = 150;
+const PAD = 60;
 
 export interface HelixNode {
   note: NoteNode;
   index: number; // 0 = newest
   strand: 0 | 1;
-  y: number; // world y; newest at 0, oldest at the bottom
+  /** Distance up the coil from the spring. Stable: adding newer notes never changes it. */
+  d: number;
+  /** World y (top-origin) for the current vault size. */
+  y: number;
 }
 
 export interface HelixLayout {
@@ -18,56 +24,55 @@ export interface HelixLayout {
   /** Links with both endpoints present, de-duplicated and undirected. */
   rungs: [HelixNode, HelixNode][];
   height: number;
+  /** World y of d = 0 (the oldest note's row). */
+  baseY: number;
+  /** World y of the centre of the pool. */
+  poolY: number;
 }
 
-const PAD = 60;
+/** The time a note sits at on the axis: frontmatter `created` when present, else modified time. */
+export const timeOf = (n: NoteNode) => (typeof n.created === "number" ? n.created : n.mtime);
 
 /**
- * Pick a strand per note so linked notes sit on opposite strands (a link becomes a rung
- * between the two strands). Most-connected notes are placed first; each later note goes
- * opposite the strand most of its already-placed neighbours are on. Ties and isolated
- * notes balance the two strands.
+ * Pick a strand per note so the strongest link partner sits on the opposite strand
+ * (links become rungs). Notes are placed oldest-first and look only at already-placed
+ * (older) notes, so adding a newer note never changes any existing note's strand.
+ * `index` 0 is the newest note; edges are index pairs.
+ * Strongest partner = most neighbours in common, then the most recent.
  */
 export function assignStrands(count: number, edges: [number, number][]): (0 | 1)[] {
-  const adj: number[][] = Array.from({ length: count }, () => []);
+  const adj: Set<number>[] = Array.from({ length: count }, () => new Set<number>());
   for (const [a, b] of edges) {
-    adj[a].push(b);
-    adj[b].push(a);
+    adj[a].add(b);
+    adj[b].add(a);
   }
-  const order = Array.from({ length: count }, (_, i) => i).sort((a, b) => adj[b].length - adj[a].length || a - b);
-  const strand: (0 | 1 | -1)[] = new Array(count).fill(-1);
+  const strand: (0 | 1)[] = new Array(count).fill(0);
   const size = [0, 0];
-  const queued = new Array<boolean>(count).fill(false);
-  // Place a connected component breadth-first from its most-connected note so chains alternate cleanly.
-  for (const start of order) {
-    if (strand[start] !== -1) continue;
-    const queue = [start];
-    queued[start] = true;
-    for (let q = 0; q < queue.length; q++) {
-      const n = queue[q];
-      if (strand[n] === -1) {
-        const votes = [0, 0];
-        for (const m of adj[n]) if (strand[m] !== -1) votes[strand[m] as 0 | 1]++;
-        // opposite the strand holding more of its neighbours; on a tie, the emptier strand
-        strand[n] = votes[0] === votes[1] ? (size[0] <= size[1] ? 0 : 1) : votes[0] > votes[1] ? 1 : 0;
-        size[strand[n] as 0 | 1]++;
-      }
-      for (const m of adj[n].slice().sort((x, y) => adj[y].length - adj[x].length || x - y)) if (!queued[m]) {
-        queued[m] = true;
-        queue.push(m);
+  for (let i = count - 1; i >= 0; i--) {
+    let best = -1;
+    let bestW = -1;
+    for (const j of adj[i]) {
+      if (j <= i) continue; // not placed yet (newer)
+      let w = 1;
+      for (const k of adj[i]) if (k !== j && adj[j].has(k)) w++;
+      if (w > bestW || (w === bestW && j < best)) {
+        best = j;
+        bestW = w;
       }
     }
+    strand[i] = best >= 0 ? ((1 - strand[best]) as 0 | 1) : size[0] <= size[1] ? 0 : 1;
+    size[strand[i]]++;
   }
-  return strand as (0 | 1)[];
+  return strand;
 }
 
 /**
- * Vertical time axis: newest notes at the top, oldest at the bottom. Rows are spaced by
- * rank rather than clock time so a burst of notes on one day never overlaps. Strands are
- * chosen so linked notes face each other across the helix (see assignStrands).
+ * Vertical time axis: oldest at the bottom (nearest the spring), newest at the top.
+ * Rows are spaced by rank, not clock time, so a burst of notes never overlaps.
+ * Everything is measured from the spring, so adding notes only extends the coil upward.
  */
 export function layoutHelix(data: GraphData): HelixLayout {
-  const sorted = data.nodes.slice().sort((a, b) => b.mtime - a.mtime || a.path.localeCompare(b.path));
+  const sorted = data.nodes.slice().sort((a, b) => timeOf(b) - timeOf(a) || a.path.localeCompare(b.path));
   const idx = new Map(sorted.map((n, i) => [n.path, i]));
   const seen = new Set<string>();
   const pairs: [number, number][] = [];
@@ -80,27 +85,49 @@ export function layoutHelix(data: GraphData): HelixLayout {
     seen.add(key);
     pairs.push([a, b]);
   }
-  const strands = assignStrands(sorted.length, pairs);
-  const nodes = sorted.map((note, index): HelixNode => ({ note, index, strand: strands[index], y: PAD + index * ROW_GAP }));
-  const byPath = new Map(nodes.map((n) => [n.note.path, n]));
+  const n = sorted.length;
+  const strands = assignStrands(n, pairs);
+  const height = PAD * 2 + Math.max(0, n - 1) * ROW_GAP + POOL_H;
+  const baseY = height - POOL_H - PAD;
+  const nodes = sorted.map((note, index): HelixNode => {
+    const d = (n - 1 - index) * ROW_GAP;
+    return { note, index, strand: strands[index], d, y: baseY - d };
+  });
+  const byPath = new Map(nodes.map((nd) => [nd.note.path, nd]));
   const rungs = pairs.map(([a, b]): [HelixNode, HelixNode] => [nodes[a], nodes[b]]);
-  return { nodes, byPath, rungs, height: PAD * 2 + Math.max(0, nodes.length - 1) * ROW_GAP };
+  return { nodes, byPath, rungs, height, baseY, poolY: height - POOL_H * 0.4 };
 }
 
-/** Phase angle of the helix at world y. */
-export const phaseAt = (y: number) => (2 * Math.PI * y) / (TURN_ROWS * ROW_GAP);
+/** Phase angle of the helix at distance d from the spring. */
+export const phaseAt = (d: number) => (2 * Math.PI * d) / (TURN_ROWS * ROW_GAP);
 
-/** Horizontal offset from the helix axis for a strand at world y. */
-export const strandX = (y: number, strand: 0 | 1, radius = RADIUS) => radius * Math.sin(phaseAt(y) + strand * Math.PI);
+/** Coil radius at distance d: full above the oldest note, narrowing into the pool below it. */
+export const radiusAt = (d: number, drop = PAD + POOL_H * 0.6) => (d >= 0 ? RADIUS : RADIUS * Math.max(0.08, 1 + d / drop));
+
+/** Horizontal offset from the helix axis for a strand at distance d. */
+export const strandX = (d: number, strand: 0 | 1) => radiusAt(d) * Math.sin(phaseAt(d) + strand * Math.PI);
 
 /** Depth in [-1,1]: positive means the strand is currently in front. */
-export const strandDepth = (y: number, strand: 0 | 1) => Math.cos(phaseAt(y) + strand * Math.PI);
+export const strandDepth = (d: number, strand: 0 | 1) => Math.cos(phaseAt(d) + strand * Math.PI);
 
-/** Index range of nodes whose rows intersect [top, bottom] in world y (binary-free: rows are uniform). */
-export function visibleRange(count: number, top: number, bottom: number, margin = 2): [number, number] {
+/** Index range of nodes whose rows intersect [top, bottom] in world y, capped to `cap` rendered nodes. */
+export function visibleRange(layout: HelixLayout, top: number, bottom: number, margin = 2, cap = 1000): [number, number] {
+  const count = layout.nodes.length;
   const first = Math.max(0, Math.floor((top - PAD) / ROW_GAP) - margin);
-  const last = Math.min(count - 1, Math.ceil((bottom - PAD) / ROW_GAP) + margin);
+  const last = Math.min(count - 1, Math.ceil((bottom - PAD) / ROW_GAP) + margin, first + cap - 1);
   return [first, last];
+}
+
+/** Nodes within `depth` link-hops of `path` (including itself). */
+export function withinHops(adj: Map<string, Set<string>>, path: string, depth: number): Set<string> {
+  const seen = new Set<string>([path]);
+  let frontier = [path];
+  for (let h = 0; h < depth; h++) {
+    const next: string[] = [];
+    for (const p of frontier) for (const q of adj.get(p) || []) if (!seen.has(q)) { seen.add(q); next.push(q); }
+    frontier = next;
+  }
+  return seen;
 }
 
 export interface GraphPoint {

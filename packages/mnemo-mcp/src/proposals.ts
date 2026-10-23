@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { lineDiff } from "./diff.js";
 import { rewriteLinks } from "./links.js";
@@ -20,6 +21,13 @@ export interface Change {
   after: string | null;
 }
 
+/** Who settled a proposal. There is no user system: the point is proposer (`client`) vs settler. */
+export interface SettledBy {
+  actor: "mnemo-ctl" | "expiry";
+  /** OS username of whoever ran mnemo-ctl. */
+  user?: string;
+}
+
 export interface Proposal {
   id: string;
   op: ProposalOp;
@@ -32,7 +40,9 @@ export interface Proposal {
   status: ProposalStatus;
   changes: Change[];
   diff: string;
+  /** When it was settled (approved, rejected, expired or halted as stale). */
   resolvedAt?: string;
+  settledBy?: SettledBy;
 }
 
 const sha = (s: string) => crypto.createHash("sha256").update(s).digest("hex");
@@ -50,6 +60,16 @@ export class ProposalStore {
     private now: () => number = Date.now,
   ) {
     this.dir = vault.ensureState("proposals");
+  }
+
+  private human(): SettledBy {
+    let user: string | undefined;
+    try {
+      user = os.userInfo().username;
+    } catch {
+      /* no passwd entry (some containers): record the actor alone */
+    }
+    return { actor: "mnemo-ctl", ...(user ? { user } : {}) };
   }
 
   private file(id: string) {
@@ -156,6 +176,7 @@ export class ProposalStore {
       if (p.status === "pending" && Date.parse(p.expiresAt) <= this.now()) {
         p.status = "expired";
         p.resolvedAt = new Date(this.now()).toISOString();
+        p.settledBy = { actor: "expiry" };
         this.save(p);
         n++;
       }
@@ -200,6 +221,7 @@ export class ProposalStore {
     const halt = (why: string): never => {
       p.status = "stale";
       p.resolvedAt = new Date(this.now()).toISOString();
+      p.settledBy = this.human();
       this.save(p);
       throw new VaultError(`Proposal ${id} is stale: ${why}. Nothing was applied; ask the agent to re-propose`);
     };
@@ -222,6 +244,7 @@ export class ProposalStore {
     }
     p.status = "approved";
     p.resolvedAt = new Date(this.now()).toISOString();
+    p.settledBy = this.human();
     this.save(p);
     return p;
   }
@@ -230,6 +253,7 @@ export class ProposalStore {
     const p = this.pending(id);
     p.status = "rejected";
     p.resolvedAt = new Date(this.now()).toISOString();
+    p.settledBy = this.human();
     this.save(p);
     return p;
   }

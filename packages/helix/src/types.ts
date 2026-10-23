@@ -3,6 +3,10 @@ export interface NoteNode {
   title: string;
   mtime: number;
   tags: string[];
+  /** Frontmatter `created` (ms), when present. The time axis prefers it over `mtime`. */
+  created?: number | null;
+  /** First ~160 characters of the body, for the focus card. */
+  excerpt?: string;
 }
 export interface Link {
   src: string;

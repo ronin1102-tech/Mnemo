@@ -17,11 +17,19 @@ describe("gold is reserved for agent proposals", () => {
       });
     }
   });
+  it("the emblem's own gold (MARK_GOLD) is used only inside drawEmblem", () => {
+    const src = read("src/render.ts");
+    const emblem = src.slice(src.indexOf("export function drawEmblem"), src.indexOf("export interface GraphView"));
+    expect(src.replace(emblem, "")).not.toContain("markGold");
+    for (const f of fs.readdirSync(path.join(root, "src")).filter((f) => f !== "render.ts" && f !== "colors.ts"))
+      expect(read("src/" + f)).not.toContain("markGold");
+  });
   it("CSS uses --gold only inside proposal selectors", () => {
     const css = read("style.css");
     for (const m of css.matchAll(/([^{}]+)\{([^}]*)\}/g)) {
       if (/var\(--gold\)/.test(m[2])) expect(m[1]).toMatch(/proposal/);
     }
     expect(css.match(new RegExp(COLORS.gold, "gi"))?.length).toBe(1); // the token definition
+    expect(css.toLowerCase()).not.toContain(COLORS.markGold);
   });
 });
