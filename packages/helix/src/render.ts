@@ -497,24 +497,32 @@ export function drawGraph(ctx: CanvasRenderingContext2D, view: View, s: GraphDra
   ctx.textAlign = "left";
   let selPos: { x: number; y: number } | null = null;
   const labels: [string, number, number, boolean, number][] = [];
+  // Additive glow must scale with crowding, or thousands of halos sum to a white-out.
+  let visible = 0;
+  for (const p of s.pts.values()) {
+    const q = graphToScreen(view, s.gv, p);
+    if (q.x > -30 && q.y > -30 && q.x < view.w + 30 && q.y < view.h + 30) visible++;
+  }
+  const density = Math.min(1, 220 / Math.max(1, visible));
+  const shrink = Math.max(0.45, Math.min(1, s.gv.zoom));
   for (const [path, p] of s.pts) {
     const { x, y } = graphToScreen(view, s.gv, p);
     if (x < -30 || y < -30 || x > view.w + 30 || y > view.h + 30) continue;
     const deg = s.degree.get(path) || 0;
-    const r = 3 + Math.min(6, Math.sqrt(deg) * 1.4);
+    const r = (3 + Math.min(6, Math.sqrt(deg) * 1.4)) * shrink;
     const isSel = path === s.selected;
     const isHover = path === s.hover;
     const near = s.neighbours.has(path);
     const dim = s.selected && !isSel && !near;
-    const a = A * (dim ? 0.22 : 1);
-    if (s.fx.glow) {
+    const a = A * (dim ? (density < 1 ? 0.1 : 0.22) : 1);
+    if (s.fx.glow && !dim) {
       ctx.globalCompositeOperation = "lighter";
-      ctx.globalAlpha = a * (0.3 + Math.min(0.4, deg * 0.04));
+      ctx.globalAlpha = a * (0.3 + Math.min(0.4, deg * 0.04)) * (isSel || near ? 1 : density);
       blit(ctx, glow, x, y, r * 6 + (isHover ? 10 : 0));
       ctx.globalCompositeOperation = "source-over";
     }
     if (s.proposed.has(path)) proposedMarker(ctx, x, y, a);
-    ctx.globalAlpha = a;
+    ctx.globalAlpha = a * (dim || isSel || near ? 1 : 0.35 + 0.65 * density);
     ctx.beginPath();
     ctx.arc(x, y, r, 0, TAU);
     ctx.fillStyle = COLORS.node;
@@ -522,7 +530,21 @@ export function drawGraph(ctx: CanvasRenderingContext2D, view: View, s: GraphDra
     if (isSel) selPos = { x, y };
     if (isHover && !isSel) ring(ctx, x, y, r + 6, COLORS.select, 1.4);
     const hub = deg >= s.hubDegree;
-    if (isSel || isHover || near || s.gv.zoom >= 1.6 || (hub && !s.selected)) labels.push([path, x + r + 7, y, isSel, a]);
+    if (isSel || isHover || near || s.gv.zoom >= 1.6 || (hub && !s.selected && density > 0.5)) labels.push([path, x + r + 7, y, isSel, a]);
+  }
+  // the focused neighbourhood is redrawn on top of the crowd so it is never buried
+  if (s.selected) {
+    for (const path of s.neighbours) {
+      const p = s.pts.get(path);
+      if (!p) continue;
+      const { x, y } = graphToScreen(view, s.gv, p);
+      const r = (3 + Math.min(6, Math.sqrt(s.degree.get(path) || 0) * 1.4)) * shrink;
+      ctx.globalAlpha = A;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, TAU);
+      ctx.fillStyle = COLORS.node;
+      ctx.fill();
+    }
   }
   // labels last, so no node or glow is drawn over a title
   for (const [path, x, y, isSel, a] of labels) {
