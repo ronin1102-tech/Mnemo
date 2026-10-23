@@ -7,9 +7,9 @@ import { createServer, localDate } from "../src/server.js";
 import { Vault } from "../src/vault.js";
 import { tmpVault } from "./helpers.js";
 
-async function connect(files: Record<string, string>) {
+async function connect(files: Record<string, string>, opts: { readOnly?: boolean } = {}) {
   const root = tmpVault(files);
-  const { server } = createServer(new Vault(root));
+  const { server } = createServer(new Vault(root), opts);
   const [ct, st] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "test-agent", version: "1" });
   await Promise.all([server.connect(st), client.connect(ct)]);
@@ -28,7 +28,7 @@ describe("mnemo mcp server", () => {
     const { client } = await connect({});
     const names = (await client.listTools()).tools.map((t) => t.name).sort();
     expect(names).toEqual(
-      ["daily_note", "get_backlinks", "list_notes", "list_proposals", "list_recent", "propose_append", "propose_delete", "propose_write", "read_note", "search_notes"],
+      ["append_note", "daily_note", "delete_note", "find_similar", "get_backlinks", "get_neighbors", "get_tags", "list_notes", "list_proposals", "list_recent", "move_note", "patch_note", "read_note", "search_notes", "write_note"],
     );
   });
 
@@ -66,13 +66,51 @@ describe("mnemo mcp server", () => {
 
   it("writes only create proposals, recording the client", async () => {
     const { root, call } = await connect({ "a.md": "old" });
-    const r = await call("propose_write", { path: "a.md", content: "new" });
+    const r = await call("write_note", { path: "a.md", content: "new" });
     expect(r.data.status).toBe("pending");
     expect(fs.readFileSync(path.join(root, "a.md"), "utf8")).toBe("old");
     const list = (await call("list_proposals", { status: "pending" })).data;
     expect(list).toHaveLength(1);
     expect(list[0].client).toBe("test-agent");
-    await call("propose_delete", { path: "a.md" });
+    await call("delete_note", { path: "a.md" });
     expect(fs.existsSync(path.join(root, "a.md"))).toBe(true);
+  });
+
+  it("--read-only registers no write tools", async () => {
+    const { client } = await connect({}, { readOnly: true });
+    const names = (await client.listTools()).tools.map((t) => t.name);
+    expect(names).not.toContain("write_note");
+    expect(names.filter((n) => /write|append|patch|move|delete/.test(n))).toEqual([]);
+    expect(names).toContain("search_notes");
+  });
+
+  it("patch_note and move_note go through the gate", async () => {
+    const { root, call } = await connect({ "a.md": "hello world", "b.md": "[[a]]" });
+    expect((await call("patch_note", { path: "a.md", anchor: "zzz", replacement: "x" })).isError).toBe(true);
+    const r = await call("move_note", { from: "a.md", to: "c.md" });
+    expect(r.data.status).toBe("pending");
+    expect(fs.existsSync(path.join(root, "a.md"))).toBe(true);
+  });
+
+  it("get_neighbors, get_tags and find_similar", async () => {
+    const { call } = await connect({
+      "hub.md": "# Hub\n[[a]] [[b]] #topic",
+      "a.md": "# A\n[[shared]] #topic",
+      "b.md": "# B\n[[shared]] #other",
+      "shared.md": "# Shared",
+      "lone.md": "# Lone [[missing]]",
+    });
+    const n = (await call("get_neighbors", { path: "a.md", depth: 2 })).data;
+    expect(n.outgoing.map((x: any) => x.path)).toEqual(["shared.md"]);
+    expect(n.incoming.map((x: any) => x.path)).toEqual(["hub.md"]);
+    expect(n.nodes.map((x: any) => x.path).sort()).toEqual(["b.md", "hub.md", "shared.md"]);
+    expect((await call("get_neighbors", { path: "lone.md" })).data.unresolved).toEqual(["missing"]);
+    expect((await call("get_tags")).data).toEqual([{ tag: "topic", count: 2 }, { tag: "other", count: 1 }]);
+    expect((await call("get_tags", { tag: "#topic" })).data).toHaveLength(2);
+    const sim = (await call("find_similar", { path: "a.md" })).data;
+    expect(sim[0].path).toBe("b.md"); // same outgoing link + same linker
+    expect(sim[0].score).toBeGreaterThan(0.3);
+    expect(sim[0].reasons.join(" ")).toMatch(/links to the same/);
+    expect((await call("find_similar", { path: "nope.md" })).isError).toBe(true);
   });
 });

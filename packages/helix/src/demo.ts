@@ -1,6 +1,6 @@
 import type { GraphData } from "./types";
 
-/** Shown only when no graph.js from `mnemo-mcp export-graph` is present. */
+/** Shown only when no graph.js from `mnemo-ctl export-graph` is present. */
 export function demoData(): GraphData {
   const titles = ["Mnemo", "Helix UI", "Write gate", "Vault jail", "FTS5 index", "Daily 2026-10-20", "Daily 2026-10-21", "Daily 2026-10-22",
     "Reading list", "Catalina notes", "Canvas perf", "Wikilinks", "Backlinks", "Proposal expiry", "Trash policy", "Inbox", "Ideas", "Meeting notes"];

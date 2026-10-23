@@ -12,7 +12,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
-    "start": "node dist/cli.js serve"
+    "start": "node dist/cli.js serve",
+    "bench": "npm run build && node scripts/bench.mjs"
   },
   "engines": {
     "node": ">=18"

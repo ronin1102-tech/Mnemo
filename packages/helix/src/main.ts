@@ -18,7 +18,7 @@ const sourceEl = $<HTMLElement>("source");
 
 const injected = (window as unknown as { __MNEMO_GRAPH__?: GraphData }).__MNEMO_GRAPH__;
 const data: GraphData = injected || demoData();
-sourceEl.textContent = injected ? `Vault snapshot ${injected.generatedAt.slice(0, 16).replace("T", " ")} · ${data.nodes.length} notes` : "Demo data — run `mnemo-mcp export-graph` to load your vault";
+sourceEl.textContent = injected ? `Vault snapshot ${injected.generatedAt.slice(0, 16).replace("T", " ")} · ${data.nodes.length} notes` : "Demo data — run `mnemo-ctl export-graph` to load your vault";
 
 const layout: HelixLayout = layoutHelix(data);
 const graphPts: Map<string, GraphPoint> = layoutGraph(data.nodes, data.links);
@@ -159,7 +159,7 @@ function showDetail(path: string) {
   detailEl.appendChild(h);
   detailEl.appendChild(el("p", "path", note.path + " · " + new Date(note.mtime).toISOString().slice(0, 10)));
   if (note.tags.length) detailEl.appendChild(el("p", "tags", note.tags.map((t) => "#" + t).join(" ")));
-  for (const p of props) detailEl.appendChild(el("p", "proposal", `Pending ${p.op} proposal from ${p.client}. Review with: mnemo-mcp proposals show ${p.id}`));
+  for (const p of props) detailEl.appendChild(el("p", "proposal", `Pending ${p.op} proposal from ${p.client}. Review with: mnemo-ctl show ${p.id}`));
   detailEl.appendChild(linkGroup("Links to", out));
   detailEl.appendChild(linkGroup("Linked from", inn));
   liveEl.textContent = `Selected ${note.title}. ${out.length} outgoing, ${inn.length} incoming links.`;

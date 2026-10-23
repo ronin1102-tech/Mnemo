@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import crypto from "node:crypto";
 import path from "node:path";
 
 export const RESERVED_DIR = ".mnemo";
@@ -99,5 +100,39 @@ export class Vault {
     };
     walk(this.root, "");
     return out.sort();
+  }
+
+  /**
+   * Crash-safe write: temp file in the same directory -> fsync -> rename over the
+   * target -> fsync the directory. Readers see the old note or the new one, never half.
+   */
+  atomicWrite(rel: string, content: string): void {
+    const { abs } = this.resolve(rel);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    this.resolve(rel); // re-check the jail now that parents exist
+    const tmp = `${abs}.mnemo-tmp-${process.pid}-${crypto.randomBytes(4).toString("hex")}`;
+    const fd = fs.openSync(tmp, "wx");
+    try {
+      fs.writeFileSync(fd, content);
+      fs.fsyncSync(fd);
+    } catch (e) {
+      fs.closeSync(fd);
+      fs.rmSync(tmp, { force: true });
+      throw e;
+    }
+    fs.closeSync(fd);
+    try {
+      fs.renameSync(tmp, abs);
+    } catch (e) {
+      fs.rmSync(tmp, { force: true });
+      throw e;
+    }
+    try {
+      const dfd = fs.openSync(path.dirname(abs), "r");
+      fs.fsyncSync(dfd);
+      fs.closeSync(dfd);
+    } catch {
+      /* directory fsync is unsupported on some platforms (Windows) */
+    }
   }
 }

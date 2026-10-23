@@ -41,3 +41,22 @@ export function makeResolver(paths: string[]) {
     return cands && cands.length === 1 ? cands[0] : cands ? cands.sort()[0] : null;
   };
 }
+
+/**
+ * Rewrite wikilinks that resolve to `from` so they resolve to `to` after a move.
+ * Aliases and #headings are preserved; links that still resolve correctly are left alone.
+ */
+export function rewriteWikilinks(body: string, paths: string[], from: string, to: string): string {
+  const before = makeResolver(paths);
+  const after = makeResolver(paths.filter((p) => p !== from).concat(to));
+  const toNoExt = to.replace(/\.md$/i, "");
+  return body.replace(WIKILINK, (whole, inner: string) => {
+    const m = inner.match(/^([^|#]*)(.*)$/s) as RegExpMatchArray;
+    const target = m[1].trim();
+    if (!target || before(target) !== from || after(target) === to) return whole;
+    const hadExt = /\.md$/i.test(target);
+    let next = target.includes("/") ? toNoExt : toNoExt.split("/").pop()!;
+    if (after(next) !== to) next = toNoExt;
+    return `[[${next}${hadExt ? ".md" : ""}${m[2]}]]`;
+  });
+}

@@ -2,25 +2,35 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { lineDiff } from "./diff.js";
+import { rewriteWikilinks } from "./links.js";
 import { Vault, VaultError } from "./vault.js";
 
 export const PROPOSAL_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export const MAX_NOTE_BYTES = 1_000_000;
 
-export type ProposalOp = "write" | "append" | "delete";
-export type ProposalStatus = "pending" | "approved" | "rejected" | "expired";
+export type ProposalOp = "write" | "append" | "patch" | "move" | "delete";
+/** `stale` = the vault moved on after the proposal was made; approval halted and nothing was applied. */
+export type ProposalStatus = "pending" | "approved" | "rejected" | "expired" | "stale";
+
+/** One note a proposal depends on. `after: null` means "check only, don't rewrite content". */
+export interface Change {
+  path: string;
+  /** sha256 of the note when proposed, or null if it did not exist. */
+  baseHash: string | null;
+  after: string | null;
+}
 
 export interface Proposal {
   id: string;
   op: ProposalOp;
   path: string;
+  /** Destination for `move`. */
+  to?: string;
   client: string;
   createdAt: string;
   expiresAt: string;
   status: ProposalStatus;
-  /** sha256 of the note when proposed, or null if it did not exist. Approval fails if disk has moved on. */
-  baseHash: string | null;
-  after: string | null;
+  changes: Change[];
   diff: string;
   resolvedAt?: string;
 }
@@ -28,9 +38,9 @@ export interface Proposal {
 const sha = (s: string) => crypto.createHash("sha256").update(s).digest("hex");
 
 /**
- * The write gate. Agent-facing code can only call `propose`. `approve`, `reject`
- * and `purgeTrash` exist for the human CLI and are never registered as MCP tools.
- * There is deliberately no option anywhere to skip this step.
+ * The write gate. Agent-facing code can only call the propose* methods.
+ * `approve`, `reject` and `purgeTrash` exist for the human CLI (mnemo-ctl) and
+ * are never registered as MCP tools. There is deliberately no way to skip this step.
  */
 export class ProposalStore {
   private dir: string;
@@ -51,30 +61,91 @@ export class ProposalStore {
     fs.writeFileSync(this.file(p.id), JSON.stringify(p, null, 2));
   }
 
-  propose(op: ProposalOp, rel: string, content: string | null, client: string): Proposal {
-    const { rel: p, abs } = this.vault.resolve(rel);
-    const current = fs.existsSync(abs) ? fs.readFileSync(abs, "utf8") : null;
-    if (op === "delete" && current === null) throw new VaultError(`Note not found: ${p}`);
-    if (op === "append" && current === null) throw new VaultError(`Cannot append to missing note: ${p}`);
-    let after: string | null = null;
-    if (op === "write") after = content ?? "";
-    if (op === "append") after = current + (current!.endsWith("\n") || current === "" ? "" : "\n") + (content ?? "");
-    if (after !== null && Buffer.byteLength(after) > MAX_NOTE_BYTES) throw new VaultError("Note exceeds 1MB limit");
+  private readCurrent(rel: string): string | null {
+    const { abs } = this.vault.resolve(rel);
+    return fs.existsSync(abs) ? fs.readFileSync(abs, "utf8") : null;
+  }
+
+  private limit(s: string) {
+    if (Buffer.byteLength(s) > MAX_NOTE_BYTES) throw new VaultError("Note exceeds 1MB limit");
+  }
+
+  private create(op: ProposalOp, rel: string, changes: Change[], diff: string, client: string, to?: string): Proposal {
     const created = this.now();
-    const proposal: Proposal = {
+    const p: Proposal = {
       id: `${new Date(created).toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)}-${crypto.randomBytes(3).toString("hex")}`,
       op,
-      path: p,
+      path: rel,
+      ...(to ? { to } : {}),
       client: client || "unknown",
       createdAt: new Date(created).toISOString(),
       expiresAt: new Date(created + PROPOSAL_TTL_MS).toISOString(),
       status: "pending",
-      baseHash: current === null ? null : sha(current),
-      after,
-      diff: lineDiff(current ?? "", after ?? ""),
+      changes,
+      diff,
     };
-    this.save(proposal);
-    return proposal;
+    this.save(p);
+    return p;
+  }
+
+  private single(op: ProposalOp, rel: string, current: string | null, after: string | null, client: string) {
+    if (after !== null) this.limit(after);
+    return this.create(op, rel, [{ path: rel, baseHash: current === null ? null : sha(current), after }], lineDiff(current ?? "", after ?? ""), client);
+  }
+
+  /** Create or replace a note. */
+  proposeWrite(rel: string, content: string, client: string): Proposal {
+    const p = this.vault.normalize(rel);
+    return this.single("write", p, this.readCurrent(p), content, client);
+  }
+
+  proposeAppend(rel: string, content: string, client: string): Proposal {
+    const p = this.vault.normalize(rel);
+    const cur = this.readCurrent(p);
+    if (cur === null) throw new VaultError(`Cannot append to missing note: ${p}`);
+    return this.single("append", p, cur, cur + (cur === "" || cur.endsWith("\n") ? "" : "\n") + content, client);
+  }
+
+  /** Replace one exact occurrence of `anchor`. Fails closed: zero or multiple matches is an error, never a guess. */
+  proposePatch(rel: string, anchor: string, replacement: string, client: string): Proposal {
+    const p = this.vault.normalize(rel);
+    const cur = this.readCurrent(p);
+    if (cur === null) throw new VaultError(`Note not found: ${p}`);
+    if (anchor === "") throw new VaultError("Anchor must not be empty");
+    const first = cur.indexOf(anchor);
+    if (first < 0) throw new VaultError("Anchor not found; nothing proposed");
+    if (cur.indexOf(anchor, first + 1) >= 0) throw new VaultError("Anchor matches more than once; use a longer, unique anchor");
+    return this.single("patch", p, cur, cur.slice(0, first) + replacement + cur.slice(first + anchor.length), client);
+  }
+
+  proposeDelete(rel: string, client: string): Proposal {
+    const p = this.vault.normalize(rel);
+    const cur = this.readCurrent(p);
+    if (cur === null) throw new VaultError(`Note not found: ${p}`);
+    return this.single("delete", p, cur, null, client);
+  }
+
+  /** Move/rename a note and rewrite every inbound wikilink in the same proposal. */
+  proposeMove(fromRel: string, toRel: string, client: string): Proposal {
+    const from = this.vault.normalize(fromRel);
+    const to = this.vault.normalize(toRel);
+    if (from === to) throw new VaultError("Source and destination are the same");
+    const cur = this.readCurrent(from);
+    if (cur === null) throw new VaultError(`Note not found: ${from}`);
+    if (this.readCurrent(to) !== null) throw new VaultError(`Destination already exists: ${to}`);
+    const all = this.vault.listAll();
+    const changes: Change[] = [{ path: from, baseHash: sha(cur), after: null }];
+    const parts = [`move ${from} -> ${to}`];
+    for (const other of all) {
+      if (other === from) continue;
+      const body = this.vault.read(other);
+      const next = rewriteWikilinks(body, all, from, to);
+      if (next === body) continue;
+      this.limit(next);
+      changes.push({ path: other, baseHash: sha(body), after: next });
+      parts.push(`\n@@ ${other} (link rewrite)\n${lineDiff(body, next)}`);
+    }
+    return this.create("move", from, changes, parts.join("\n"), client, to);
   }
 
   /** Mark overdue pending proposals expired. Runs on every read of the store. */
@@ -118,22 +189,35 @@ export class ProposalStore {
     return p;
   }
 
-  /** Human-only. Applies the proposal to disk. */
+  /**
+   * Human-only. Everything is validated before anything is written: if any note
+   * the proposal depends on changed, the proposal is marked stale and the whole
+   * approval halts with the vault untouched.
+   */
   approve(id: string): Proposal {
     const p = this.pending(id);
-    const { abs } = this.vault.resolve(p.path);
-    const current = fs.existsSync(abs) ? fs.readFileSync(abs, "utf8") : null;
-    if ((current === null ? null : sha(current)) !== p.baseHash) {
-      throw new VaultError(`Note ${p.path} changed since this was proposed; reject it and ask the agent to re-propose`);
+    const halt = (why: string): never => {
+      p.status = "stale";
+      p.resolvedAt = new Date(this.now()).toISOString();
+      this.save(p);
+      throw new VaultError(`Proposal ${id} is stale: ${why}. Nothing was applied; ask the agent to re-propose`);
+    };
+    for (const c of p.changes) {
+      const cur = this.readCurrent(c.path);
+      if ((cur === null ? null : sha(cur)) !== c.baseHash) halt(`${c.path} changed since it was proposed`);
     }
-    if (p.op === "delete") {
-      this.moveToTrash(p.path);
+    if (p.op === "move" && this.readCurrent(p.to as string) !== null) halt(`destination ${p.to} now exists`);
+    if (p.op === "move") this.vault.resolve(p.to as string);
+
+    if (p.op === "delete") this.moveToTrash(p.path);
+    else if (p.op === "move") {
+      for (const c of p.changes) if (c.after !== null) this.vault.atomicWrite(c.path, c.after);
+      const dest = this.vault.resolve(p.to as string);
+      fs.mkdirSync(path.dirname(dest.abs), { recursive: true });
+      this.vault.resolve(p.to as string);
+      fs.renameSync(this.vault.resolve(p.path).abs, dest.abs);
     } else {
-      fs.mkdirSync(path.dirname(abs), { recursive: true });
-      this.vault.resolve(p.path); // re-check jail after mkdir
-      const tmp = `${abs}.mnemo-tmp-${process.pid}`;
-      fs.writeFileSync(tmp, p.after ?? "");
-      fs.renameSync(tmp, abs);
+      this.vault.atomicWrite(p.path, p.changes[0].after ?? "");
     }
     p.status = "approved";
     p.resolvedAt = new Date(this.now()).toISOString();

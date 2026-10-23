@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { Index } from "./indexer.js";
 import { makeLogger } from "./log.js";
-import { ProposalStore } from "./proposals.js";
+import { ProposalStore, type Proposal } from "./proposals.js";
 import { Vault, VaultError } from "./vault.js";
 
 export const DAILY_DIR = "daily";
@@ -18,7 +18,12 @@ const fail = (e: unknown) => ({
   content: [{ type: "text" as const, text: e instanceof VaultError ? e.message : "Internal error" }],
 });
 
-export function createServer(vault: Vault) {
+export interface ServerOptions {
+  /** Do not register any write tool at all. */
+  readOnly?: boolean;
+}
+
+export function createServer(vault: Vault, opts: ServerOptions = {}) {
   const index = new Index(vault);
   const proposals = new ProposalStore(vault);
   const log = makeLogger(vault);
@@ -84,35 +89,60 @@ export function createServer(vault: Vault) {
     return vault.exists(rel) ? { path: rel, exists: true, content: vault.read(rel) } : { path: rel, exists: false, content: null };
   });
 
-  const propose = (op: "write" | "append" | "delete", path: string, content: string | null) => {
-    const p = proposals.propose(op, path, content, client());
-    log("proposal", { id: p.id, op, path: p.path, client: p.client });
-    return {
-      id: p.id,
-      status: p.status,
-      expiresAt: p.expiresAt,
-      message: "Proposal saved. Nothing was written. A human must approve it with `mnemo-mcp proposals approve`.",
-      diff: p.diff,
+  tool("get_neighbors", "Link neighbourhood of a note: outgoing, incoming and unresolved links, plus nodes/edges out to `depth` hops.", {
+    path: z.string(),
+    depth: z.number().int().min(1).max(3).default(1),
+  }, ({ path, depth }) => {
+    const rel = vault.normalize(path);
+    const r = index.neighbors(rel, depth);
+    if (!r) throw new VaultError(`Note not found: ${rel}`);
+    return r;
+  });
+
+  tool("find_similar", "Structurally similar notes (shared links, shared linkers, shared tags, folder). Returns score 0..1 and reasons.", {
+    path: z.string(),
+    limit: z.number().int().min(1).max(50).default(10),
+  }, ({ path, limit }) => {
+    const rel = vault.normalize(path);
+    const r = index.similar(rel, limit);
+    if (!r) throw new VaultError(`Note not found: ${rel}`);
+    return r;
+  });
+
+  tool("get_tags", "List all #tags with counts, or the notes carrying one tag.", { tag: z.string().optional() }, ({ tag }) => index.tags(tag));
+
+  tool("list_proposals", "List proposals and their status (pending, approved, rejected, expired, stale).", {
+    status: z.enum(["pending", "approved", "rejected", "expired", "stale"]).optional(),
+  }, ({ status }) => proposals.list(status).map(({ changes: _c, ...p }) => p));
+
+  if (!opts.readOnly) {
+    const done = (p: Proposal) => {
+      log("proposal", { id: p.id, op: p.op, path: p.path, client: p.client });
+      return {
+        id: p.id,
+        status: p.status,
+        expiresAt: p.expiresAt,
+        message: "Proposal saved. Nothing was written. A human must approve it with `mnemo-ctl approve`.",
+        diff: p.diff,
+      };
     };
-  };
-
-  tool("propose_write", "Propose creating or replacing a note. Does NOT modify the vault; a human approves it.", {
-    path: z.string(),
-    content: z.string(),
-  }, ({ path, content }) => propose("write", path, content), false);
-
-  tool("propose_append", "Propose appending text to an existing note. Does NOT modify the vault.", {
-    path: z.string(),
-    content: z.string(),
-  }, ({ path, content }) => propose("append", path, content), false);
-
-  tool("propose_delete", "Propose deleting a note. On approval it moves to .mnemo/trash/, never destroyed.", {
-    path: z.string(),
-  }, ({ path }) => propose("delete", path, null), false);
-
-  tool("list_proposals", "List proposals and their status (pending, approved, rejected, expired).", {
-    status: z.enum(["pending", "approved", "rejected", "expired"]).optional(),
-  }, ({ status }) => proposals.list(status).map(({ after: _a, ...p }) => p));
+    const w = false;
+    tool("write_note", "Propose creating or replacing a note. Does NOT modify the vault; a human approves it.", {
+      path: z.string(), content: z.string(),
+    }, ({ path, content }) => done(proposals.proposeWrite(path, content, client())), w);
+    tool("append_note", "Propose appending text to an existing note. Does NOT modify the vault.", {
+      path: z.string(), content: z.string(),
+    }, ({ path, content }) => done(proposals.proposeAppend(path, content, client())), w);
+    tool("patch_note", "Propose replacing one exact passage. `anchor` must match exactly once, otherwise the call fails and nothing is proposed.", {
+      path: z.string(), anchor: z.string().min(1), replacement: z.string(),
+    }, ({ path, anchor, replacement }) => done(proposals.proposePatch(path, anchor, replacement, client())), w);
+    tool("move_note", "Propose moving/renaming a note. Inbound [[wikilinks]] are rewritten in the same proposal.", {
+      from: z.string(), to: z.string(),
+    }, ({ from, to }) => done(proposals.proposeMove(from, to, client())), w);
+    tool("delete_note", "Propose deleting a note. On approval it moves to .mnemo/trash/, never destroyed.", {
+      path: z.string(),
+    }, ({ path }) => done(proposals.proposeDelete(path, client())), w);
+  }
 
   return { server, close: () => index.close() };
 }
