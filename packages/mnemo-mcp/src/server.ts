@@ -1,5 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { capDiff } from "./diff.js";
+import { MAX_NOTE_BYTES } from "./proposals.js";
 import { Index } from "./indexer.js";
 import { makeLogger } from "./log.js";
 import { ProposalStore, type Proposal } from "./proposals.js";
@@ -143,18 +145,18 @@ export function createServer(vault: Vault, opts: ServerOptions = {}) {
         status: p.status,
         expiresAt: p.expiresAt,
         message: "Proposal saved. Nothing was written. A human must approve it with `mnemo-ctl approve`.",
-        diff: p.diff,
+        diff: capDiff(p.diff, 200) + (p.diff.split("\n").length > 200 ? "\n(full diff: `mnemo-ctl show " + p.id + "`)" : ""),
       };
     };
     const w = false;
     tool("write_note", "Propose creating or replacing a note. Does NOT modify the vault; a human approves it.", {
-      path: z.string(), content: z.string(),
+      path: z.string(), content: z.string().max(MAX_NOTE_BYTES),
     }, ({ path, content }) => done(proposals.proposeWrite(path, content, client())), w);
     tool("append_note", "Propose appending text to an existing note. Does NOT modify the vault.", {
-      path: z.string(), content: z.string(),
+      path: z.string(), content: z.string().max(MAX_NOTE_BYTES),
     }, ({ path, content }) => done(proposals.proposeAppend(path, content, client())), w);
     tool("patch_note", "Propose replacing one exact passage. `anchor` must match exactly once, otherwise the call fails and nothing is proposed.", {
-      path: z.string(), anchor: z.string().min(1), replacement: z.string(),
+      path: z.string(), anchor: z.string().min(1).max(MAX_NOTE_BYTES), replacement: z.string().max(MAX_NOTE_BYTES),
     }, ({ path, anchor, replacement }) => done(proposals.proposePatch(path, anchor, replacement, client())), w);
     tool("move_note", "Propose moving/renaming a note. Inbound [[wikilinks]] are rewritten in the same proposal.", {
       from: z.string(), to: z.string(),

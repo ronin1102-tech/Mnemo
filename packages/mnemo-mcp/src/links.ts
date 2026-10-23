@@ -13,7 +13,8 @@ const unquote = (s: string) => s.trim().replace(/^(["'])(.*)\1$/, "$2");
 const cleanTag = (s: string) => unquote(s).replace(/^#/, "").trim().toLowerCase();
 
 /** Split optional YAML frontmatter (title, created, tags) from the body. Unknown fields are ignored, never rewritten. */
-export function parseFrontmatter(text: string): { fm: Frontmatter; body: string; hasFrontmatter: boolean } {
+export function parseFrontmatter(raw: string): { fm: Frontmatter; body: string; hasFrontmatter: boolean } {
+  const text = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw; // a UTF-8 BOM must not hide the opening ---
   const m = text.match(/^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/);
   const fm: Frontmatter = { tags: [] };
   if (!m) return { fm, body: text, hasFrontmatter: false };
@@ -23,7 +24,12 @@ export function parseFrontmatter(text: string): { fm: Frontmatter; body: string;
     if (!kv) continue;
     const key = kv[1].toLowerCase();
     const val = kv[2].trim();
-    if (key === "title" && val) fm.title = unquote(val);
+    if (key === "title" && /^[>|][+-]?$/.test(val)) {
+      // block scalar: the title is the indented lines that follow, folded onto one line
+      const parts: string[] = [];
+      while (i + 1 < lines.length && /^\s+\S/.test(lines[i + 1])) parts.push(lines[++i].trim());
+      if (parts.length) fm.title = parts.join(" ");
+    } else if (key === "title" && val) fm.title = unquote(val);
     else if (key === "created" && val) fm.created = unquote(val);
     else if (key === "tags") {
       let items: string[] = [];
@@ -61,6 +67,44 @@ export function extractTags(text: string): string[] {
   return [...out];
 }
 
+/**
+ * Replace code (fenced blocks and inline spans) with spaces, keeping every offset and newline.
+ * Links inside code are text, not links: they are neither edges nor rewritten on move.
+ */
+export function maskCode(text: string): string {
+  const blank = (s: string) => s.replace(/[^\n]/g, " ");
+  const lines = text.split("\n");
+  let fence: { ch: string; len: number } | null = null;
+  const out = lines.map((line) => {
+    const m = line.match(/^ {0,3}(`{3,}|~{3,})/);
+    if (fence) {
+      if (m && m[1][0] === fence.ch && m[1].length >= fence.len && /^ {0,3}[`~]+\s*$/.test(line)) fence = null;
+      return blank(line);
+    }
+    if (m) {
+      fence = { ch: m[1][0], len: m[1].length };
+      return blank(line);
+    }
+    return line;
+  });
+  return out.join("\n").replace(/(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)/g, (span) => blank(span));
+}
+
+/** Apply `fn` to each regex match found outside code; matches that touch code are left alone. */
+export function replaceOutsideCode(text: string, re: RegExp, fn: (m: RegExpMatchArray) => string): string {
+  const masked = maskCode(text);
+  let out = "";
+  let last = 0;
+  for (const m of masked.matchAll(re)) {
+    const at = m.index as number;
+    const orig = text.slice(at, at + m[0].length);
+    if (orig !== m[0]) continue; // spans a code region
+    out += text.slice(last, at) + fn(m);
+    last = at + m[0].length;
+  }
+  return out + text.slice(last);
+}
+
 export interface RawLink {
   /** Wikilink: the written target. Markdown link: the vault-relative path it points at. */
   target: string;
@@ -87,8 +131,11 @@ export function mdTarget(href: string, srcRel: string): string | null {
 export function extractLinks(body: string, srcRel: string): RawLink[] {
   const out: RawLink[] = [];
   const seen = new Set<string>();
-  for (const line of body.split("\n")) {
-    const ctx = line.trim().slice(0, 200);
+  const origLines = body.split("\n");
+  const masked = maskCode(body).split("\n");
+  for (let li = 0; li < masked.length; li++) {
+    const line = masked[li];
+    const ctx = origLines[li].trim().slice(0, 200);
     for (const m of line.matchAll(WIKILINK)) {
       const target = m[1].split("|")[0].split("#")[0].trim();
       if (target && !seen.has("w" + target)) {
@@ -138,17 +185,22 @@ export function rewriteLinks(body: string, paths: string[], srcRel: string, from
   const before = makeResolver(paths);
   const after = makeResolver(paths.filter((p) => p !== from).concat(to));
   const toNoExt = to.replace(/\.md$/i, "");
-  let out = body.replace(WIKILINK, (whole, inner: string) => {
-    const m = inner.match(/^([^|#]*)(.*)$/s) as RegExpMatchArray;
-    const target = m[1].trim();
+  let out = replaceOutsideCode(body, WIKILINK, (m) => {
+    const whole = m[0];
+    const mm = m[1].match(/^([^|#]*)(.*)$/s) as RegExpMatchArray;
+    const target = mm[1].trim();
     if (!target || before(target) !== from || after(target) === to) return whole;
     const hadExt = /\.md$/i.test(target);
     let next = target.includes("/") ? toNoExt : toNoExt.split("/").pop()!;
     if (after(next) !== to) next = toNoExt;
-    return `[[${next}${hadExt ? ".md" : ""}${m[2]}]]`;
+    return `[[${next}${hadExt ? ".md" : ""}${mm[2]}]]`;
   });
-  out = out.replace(MDLINK, (whole, href: string) => {
-    if (mdTarget(href, srcRel) !== from) return whole;
+  out = replaceOutsideCode(out, MDLINK, (m) => {
+    const whole = m[0];
+    const href = m[1];
+    const target = mdTarget(href, srcRel);
+    // same case-insensitive path match the index uses to resolve markdown links
+    if (!target || before(target, "m") !== from) return whole;
     const frag = href.includes("#") ? "#" + href.split("#").slice(1).join("#") : "";
     let rel = path.posix.relative(path.posix.dirname(srcRel), to);
     if (!rel.startsWith(".") && href.startsWith("./")) rel = "./" + rel;
