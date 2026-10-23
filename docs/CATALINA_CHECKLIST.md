@@ -15,7 +15,7 @@ node -v 2>&1; npm -v 2>&1
 Safari version: Safari > About Safari. **Write it down.** A fully updated Catalina runs Safari 15.6.1, not Safari 13. The app's webview uses whichever WebKit the OS has, so the test is: record the version, then test that. If a second, un-updated Mac or VM with Safari 13 exists, repeat section 6 there too.
 
 ## 1. Node and install (the highest-risk step)
-`better-sqlite3` is a native module. Node 22+ and 24 do not support Catalina; use **Node 20 LTS** (supports macOS 10.15+). Do not try newer.
+`better-sqlite3` is a native module. Use **Node 20 LTS**; the repo is pinned and tested for it, and Node 22+ is not an option on Catalina. `better-sqlite3` is pinned to exactly **12.9.0**, the newest release with ready-made Node 20 binaries (12.10+ ships none for Node 20, which would force a compile). Its macOS x64 binary declares a minimum of macOS 10.7, so it should load on 10.15. Expect "prebuilt binary downloaded"; if it compiles instead, that is a finding (see `docs/INSTALL.md` troubleshooting).
 ```
 node -v                       # expect v20.x
 git clone https://github.com/ronin1102-tech/Mnemo.git && cd Mnemo
@@ -35,7 +35,7 @@ npm run build
 ```
 npm test
 ```
-Expect **40 server + 15 UI** passing. Record any failure verbatim. Any failure is likely FS- or OS-specific, which is exactly what this pass is for.
+Expect **52 server + 27 UI** passing. Record any failure verbatim. Any failure is likely FS- or OS-specific, which is exactly what this pass is for.
 
 ## 3. Budgets on the real hardware
 ```

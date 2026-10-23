@@ -10,7 +10,7 @@ A local-first second brain. Notes are plain `.md` files in a folder you own; an 
 | `packages/helix` | Helix UI: Canvas 2D view of the vault, built to hold ~60fps on Safari 13 (macOS 10.15) |
 
 ```
-npm run install:all && npm run build && npm test
+npm run install:all && npm run build && npm test     # Node 20 LTS (see .nvmrc); step-by-step: docs/INSTALL.md
 ```
 
 ## MCP server
