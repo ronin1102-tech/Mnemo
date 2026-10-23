@@ -1,7 +1,7 @@
 # Mnemo: Install and Test Notes
 
 For running Mnemo yourself, on macOS 10.15 (Catalina) or newer, Windows, or Linux.
-Time: about 20 minutes. Branch: `claude/new-session-bzyycu`.
+Time: about 20 minutes. Branch: `main`.
 
 > **Use Node 20. Nothing newer.** Everything in this repo is pinned to run on Node 20 LTS, the last line that supports macOS 10.15. The whole sequence below was run start to finish from a clean clone on Node 20.20.2 (Linux).
 
@@ -23,17 +23,16 @@ npm --version
 ```
 
 ## 2. Get the code
-> **Download the right branch.** The `main` branch is older and will not install on Catalina. Use branch `claude/new-session-bzyycu`. If you already have a `Mnemo-main` folder, delete it and start again from this step.
+> **Use a fresh download.** Copies of `main` taken before 2026-10-23 (before PR #1 was merged) will not install on Catalina. If you have an older folder, delete it and start again from this step.
 
 Either **git**:
 ```
 git clone https://github.com/ronin1102-tech/Mnemo.git
 cd Mnemo
-git checkout claude/new-session-bzyycu
 ```
 On Catalina, the first `git` use may ask to install Apple's command-line tools: accept, or skip git entirely: download
-`https://github.com/ronin1102-tech/Mnemo/archive/refs/heads/claude/new-session-bzyycu.zip`
-(or on GitHub: switch the branch menu to `claude/new-session-bzyycu`, then **Code > Download ZIP**). It unzips to a folder named `Mnemo-claude-new-session-bzyycu`; `cd` into it.
+`https://github.com/ronin1102-tech/Mnemo/archive/refs/heads/main.zip`
+(or on GitHub: **Code > Download ZIP**). It unzips to a folder named `Mnemo-main`; `cd` into it.
 
 ## 3. Install, build, test
 From the `Mnemo` folder:
@@ -95,8 +94,8 @@ Then:
 | Symptom | What to do |
 |---|---|
 | `node --version` isn't v20 | Install Node 20 (step 1); with nvm, `nvm use 20`. |
-| `EBADENGINE` / "Unsupported engine" warnings mentioning vitest 5 or better-sqlite3 13 | You have the old `main` code. Download branch `claude/new-session-bzyycu` (step 2) into a fresh folder. |
-| `dyld: Symbol not found` ... "built for Mac OS X 12.0" (esbuild) | Same cause: old `main` code. The current branch pins tools that run on 10.15. |
+| `EBADENGINE` / "Unsupported engine" warnings mentioning vitest 5 or better-sqlite3 13 | You have an old copy (from before PR #1). Delete it and download `main` again (step 2) into a fresh folder. |
+| `dyld: Symbol not found` ... "built for Mac OS X 12.0" (esbuild) | Same cause: an old copy. Current `main` pins tools that run on 10.15. |
 | `npm ERR! engine` with a different package | Note it in your report; check `node --version` is v20. |
 | Install prints `gyp`, `make` or "compiling" lines, or fails in `better-sqlite3` | The ready-made binary couldn't download (network or unusual CPU), so it tried to compile. On macOS run `xcode-select --install`, then `npm run install:all` again. Copy the full error into your report either way. |
 | Page is blank | Safari: Develop > Show Web Inspector > Console (enable the Develop menu in Safari > Preferences > Advanced). Copy the red errors. |
