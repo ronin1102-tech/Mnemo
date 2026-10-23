@@ -3,7 +3,7 @@
 **Why:** the platform floor is macOS 10.15.7. Everything so far ran on Linux + Chromium. This pass is the one open blocker for calling V1 done.
 **Who:** whoever is at the Mac. **Time:** ~45 min. **Rule:** record every result, pass or fail, in the report at the bottom. Do not fix anything mid-run; a failure is a finding.
 
-Repo: `ronin1102-tech/Mnemo`, branch `claude/new-session-bzyycu`.
+Repo: `ronin1102-tech/Mnemo`, branch `main`. (Full install on Cori's Mac, 2026-10-23: clean.)
 
 ## 0. Record the machine (no pass/fail)
 ```
@@ -15,11 +15,10 @@ node -v 2>&1; npm -v 2>&1
 Safari version: Safari > About Safari. **Write it down.** A fully updated Catalina runs Safari 15.6.1, not Safari 13. The app's webview uses whichever WebKit the OS has, so the test is: record the version, then test that. If a second, un-updated Mac or VM with Safari 13 exists, repeat section 6 there too.
 
 ## 1. Node and install (the highest-risk step)
-`better-sqlite3` is a native module. Use **Node 20 LTS**; the repo is pinned and tested for it, and Node 22+ is not an option on Catalina. `better-sqlite3` is pinned to exactly **12.9.0**, the newest release with ready-made Node 20 binaries (12.10+ ships none for Node 20, which would force a compile). Its macOS x64 binary declares a minimum of macOS 10.7, so it should load on 10.15. Expect "prebuilt binary downloaded"; if it compiles instead, that is a finding (see `docs/INSTALL.md` troubleshooting). The other native tool, esbuild, is pinned to 0.23.1 (needs macOS 10.13+; 0.24+ needs 11, 0.28 needs 12, which is what crashed the first attempt from `main`). TypeScript is 5.9 (plain JavaScript) and tests run on Node's built-in runner, so no vitest/vite/rollup binaries are installed at all.
+`better-sqlite3` is a native module. Use **Node 20 LTS**; the repo is pinned and tested for it, and Node 22+ is not an option on Catalina. `better-sqlite3` is pinned to exactly **12.9.0**, the newest release with ready-made Node 20 binaries (12.10+ ships none for Node 20, which would force a compile). Its macOS x64 binary declares a minimum of macOS 10.7, so it should load on 10.15. Expect "prebuilt binary downloaded"; if it compiles instead, that is a finding (see `docs/INSTALL.md` troubleshooting). The other native tool, esbuild, is pinned to 0.23.1 (needs macOS 10.13+; 0.24+ needs 11, 0.28 needs 12, which is what crashed the first attempt, from a pre-PR-#1 copy of `main`). TypeScript is 5.9 (plain JavaScript) and tests run on Node's built-in runner, so no vitest/vite/rollup binaries are installed at all.
 ```
 node -v                       # expect v20.x
 git clone https://github.com/ronin1102-tech/Mnemo.git && cd Mnemo
-git checkout claude/new-session-bzyycu
 npm run install:all           # watch for: prebuilt binary downloaded vs. compiling from source
 npm run build
 ```
