@@ -66,8 +66,8 @@ export class Index {
     return this.knownCache;
   }
 
-  /** Bring the index in line with disk. Cheap when nothing changed (stat only). */
-  sync(): void {
+  /** Bring the index in line with disk. Cheap when nothing changed (stat only). Returns true if anything changed. */
+  sync(): boolean {
     const files = this.vault.listAll();
     const known = this.loadKnown();
     const fileSet = new Set(files);
@@ -79,7 +79,7 @@ export class Index {
       const k = known.get(rel);
       if (!k || k.mtime !== st.mtimeMs || k.size !== st.size) changed.push({ rel, st });
     }
-    if (!stale.length && !changed.length) return;
+    if (!stale.length && !changed.length) return false;
 
     const wasKnown = new Set(changed.filter((c) => known.has(c.rel)).map((c) => c.rel));
     const delFts = this.db.prepare("DELETE FROM notes_fts WHERE rowid=?");
@@ -121,6 +121,7 @@ export class Index {
       for (const r of rows) upd.run(resolve(r.target, r.kind), r.rowid);
     })();
     this.dataVersion = this.db.pragma("data_version", { simple: true }) as number;
+    return true;
   }
 
   private meta(r: { path: string; title: string; mtime: number; tags: string; created?: number | null }): NoteMeta {

@@ -23,8 +23,9 @@ export interface Change {
 
 /** Who settled a proposal. There is no user system: the point is proposer (`client`) vs settler. */
 export interface SettledBy {
-  actor: "mnemo-ctl" | "expiry";
-  /** OS username of whoever ran mnemo-ctl. */
+  /** mnemo-ctl (command line), helix (approved in the Helix view), or expiry. */
+  actor: "mnemo-ctl" | "helix" | "expiry";
+  /** OS username for local use, or the person key's name for someone on the tailnet. */
   user?: string;
 }
 
@@ -62,14 +63,15 @@ export class ProposalStore {
     this.dir = vault.ensureState("proposals");
   }
 
-  private human(): SettledBy {
+  /** Whoever is running this process on this machine. */
+  human(actor: "mnemo-ctl" | "helix" = "mnemo-ctl"): SettledBy {
     let user: string | undefined;
     try {
       user = os.userInfo().username;
     } catch {
       /* no passwd entry (some containers): record the actor alone */
     }
-    return { actor: "mnemo-ctl", ...(user ? { user } : {}) };
+    return { actor, ...(user ? { user } : {}) };
   }
 
   private file(id: string) {
@@ -216,12 +218,12 @@ export class ProposalStore {
    * the proposal depends on changed, the proposal is marked stale and the whole
    * approval halts with the vault untouched.
    */
-  approve(id: string): Proposal {
+  approve(id: string, by: SettledBy = this.human()): Proposal {
     const p = this.pending(id);
     const halt = (why: string): never => {
       p.status = "stale";
       p.resolvedAt = new Date(this.now()).toISOString();
-      p.settledBy = this.human();
+      p.settledBy = by;
       this.save(p);
       throw new VaultError(`Proposal ${id} is stale: ${why}. Nothing was applied; ask the agent to re-propose`);
     };
@@ -244,16 +246,16 @@ export class ProposalStore {
     }
     p.status = "approved";
     p.resolvedAt = new Date(this.now()).toISOString();
-    p.settledBy = this.human();
+    p.settledBy = by;
     this.save(p);
     return p;
   }
 
-  reject(id: string): Proposal {
+  reject(id: string, by: SettledBy = this.human()): Proposal {
     const p = this.pending(id);
     p.status = "rejected";
     p.resolvedAt = new Date(this.now()).toISOString();
-    p.settledBy = this.human();
+    p.settledBy = by;
     this.save(p);
     return p;
   }

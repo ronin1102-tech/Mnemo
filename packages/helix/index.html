@@ -23,6 +23,7 @@
     <button type="button" data-mode="graph" aria-pressed="false">Graph</button>
   </nav>
   <span id="source" class="source"></span>
+  <button type="button" id="proposals" class="chip proposal-chip" hidden></button>
   <button type="button" id="fx" class="chip" aria-pressed="true"><span class="fx-icon" aria-hidden="true">✦</span><span id="fx-label">Effects</span></button>
 </header>
 <main>
@@ -37,8 +38,10 @@
       <h2 id="list-h">Strand</h2>
       <span id="count" class="count"></span>
     </div>
-    <p class="panel-sub">Newest first · the same notes as the helix</p>
-    <ul id="strand-list"></ul>
+    <p class="panel-sub">Newest first · the same notes as the helix · ↑ ↓ to move</p>
+    <div id="strand-scroll" class="strand-scroll">
+      <ul id="strand-list" aria-labelledby="list-h"></ul>
+    </div>
   </aside>
 </main>
 <div id="live" class="sr" role="status" aria-live="polite"></div>

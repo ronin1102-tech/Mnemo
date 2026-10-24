@@ -17,6 +17,12 @@ export interface PendingProposal {
   path: string;
   op: string;
   client: string;
+  /** Destination of a move. */
+  to?: string;
+  createdAt?: string;
+  expiresAt?: string;
+  /** False when the proposal would create a note that isn't in the vault yet. */
+  exists?: boolean;
 }
 /** Shape written by `mnemo-mcp export-graph`. */
 export interface GraphData {
@@ -24,4 +30,8 @@ export interface GraphData {
   nodes: NoteNode[];
   links: Link[];
   proposals: PendingProposal[];
+  /** Set when served live by `mnemo-ctl ui`. */
+  live?: boolean;
+  readOnly?: boolean;
+  version?: number;
 }

@@ -133,6 +133,8 @@ export interface HelixDrawState {
   fx: TierSpec;
   /** Time (s) the current selection was made, for its spark burst. */
   selectedAt: number;
+  /** A proposal on this note just settled: flash once. */
+  flash?: { path: string; age: number; ok: boolean } | null;
 }
 
 function strandPath(ctx: CanvasRenderingContext2D, cx: number, strand: 0 | 1, front: boolean, y0: number, y1: number, toScreen: (y: number) => number, baseY: number) {
@@ -312,7 +314,7 @@ export function drawHelix(ctx: CanvasRenderingContext2D, view: View, s: HelixDra
         blit(ctx, glows[n.strand], x, y, 26 + depth * 10 + (isHover ? 10 : 0));
         ctx.globalCompositeOperation = "source-over";
       }
-      if (s.proposed.has(p)) proposedMarker(ctx, x, y, a); // gold: an agent is asking
+      if (s.proposed.has(p)) proposedMarker(ctx, x, y, a, t, s.fx.animate); // gold: an agent is asking
       ctx.globalAlpha = a;
       ctx.beginPath();
       ctx.arc(x, y, 3.8 + depth * 1.4, 0, TAU);
@@ -341,6 +343,10 @@ export function drawHelix(ctx: CanvasRenderingContext2D, view: View, s: HelixDra
     }
   }
   if (selPos) selectionMark(ctx, selPos.x, selPos.y, A, t, s);
+  if (s.flash) {
+    const n = L.byPath.get(s.flash.path);
+    if (n) settledFlash(ctx, cx + strandX(n.d, n.strand), toScreen(n.y), s.flash.age, A);
+  }
 
   // the coil dissolves into darkness at the top and bottom edges
   edgeFade(ctx, view);
@@ -383,12 +389,30 @@ function selectionMark(ctx: CanvasRenderingContext2D, x: number, y: number, A: n
   ring(ctx, x, y, 10, COLORS.select, 1.8);
 }
 
-/** Pending agent proposal: a soft gold halo and ring. The only gold in the working view. */
-function proposedMarker(ctx: CanvasRenderingContext2D, x: number, y: number, a: number) {
-  ctx.globalAlpha = a * 0.55;
-  blit(ctx, glowSprite(COLORS.gold, 0.2), x, y, 34);
+/**
+ * Pending agent proposal: a gold halo and ring that pulse (helix spec section 4: "an agent is
+ * asking"). The only gold in the working view. Static when effects are off.
+ */
+function proposedMarker(ctx: CanvasRenderingContext2D, x: number, y: number, a: number, t = 0, animate = false) {
+  const beat = animate ? 0.5 + 0.5 * Math.sin(t * 2.6) : 0.5;
+  ctx.globalAlpha = a * (0.4 + 0.35 * beat);
+  blit(ctx, glowSprite(COLORS.gold, 0.2), x, y, 30 + 16 * beat);
   ctx.globalAlpha = a;
   ring(ctx, x, y, 10, COLORS.gold, 2);
+  if (animate) {
+    ctx.globalAlpha = a * (1 - beat) * 0.8;
+    ring(ctx, x, y, 10 + 8 * beat, COLORS.gold, 1);
+  }
+}
+
+/** A proposal on this note just settled: one expanding white ring, then gone. */
+function settledFlash(ctx: CanvasRenderingContext2D, x: number, y: number, age: number, A: number) {
+  ctx.globalCompositeOperation = "lighter";
+  ctx.globalAlpha = A * (1 - age) * 0.9;
+  blit(ctx, glowSprite(COLORS.node, 0.25), x, y, 30 + 60 * age);
+  ctx.globalCompositeOperation = "source-over";
+  ctx.globalAlpha = A * (1 - age);
+  ring(ctx, x, y, 10 + 34 * age, COLORS.select, 2);
 }
 
 function edgeFade(ctx: CanvasRenderingContext2D, view: View) {
@@ -441,6 +465,7 @@ export interface GraphDrawState {
   degree: Map<string, number>;
   /** Degree at or above which a note counts as a hub. */
   hubDegree: number;
+  flash?: { path: string; age: number; ok: boolean } | null;
 }
 
 export const graphToScreen = (view: View, gv: GraphView, p: { x: number; y: number }) => ({
@@ -521,7 +546,7 @@ export function drawGraph(ctx: CanvasRenderingContext2D, view: View, s: GraphDra
       blit(ctx, glow, x, y, r * 6 + (isHover ? 10 : 0));
       ctx.globalCompositeOperation = "source-over";
     }
-    if (s.proposed.has(path)) proposedMarker(ctx, x, y, a);
+    if (s.proposed.has(path)) proposedMarker(ctx, x, y, a, s.t, s.fx.animate);
     ctx.globalAlpha = a * (dim || isSel || near ? 1 : 0.35 + 0.65 * density);
     ctx.beginPath();
     ctx.arc(x, y, r, 0, TAU);
@@ -554,6 +579,13 @@ export function drawGraph(ctx: CanvasRenderingContext2D, view: View, s: GraphDra
     ctx.fillText(shortTitle(s.titles.get(path) || path), x, y);
   }
   if (selPos) selectionMark(ctx, selPos.x, selPos.y, A, s.t, s);
+  if (s.flash) {
+    const p = s.pts.get(s.flash.path);
+    if (p) {
+      const q = graphToScreen(view, s.gv, p);
+      settledFlash(ctx, q.x, q.y, s.flash.age, A);
+    }
+  }
   ctx.globalAlpha = 1;
 }
 
