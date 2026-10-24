@@ -5,6 +5,19 @@
 
 Repo: `ronin1102-tech/Mnemo`, branch `main`. (Full install on Cori's Mac, 2026-10-23: clean.)
 
+## Results: Tracy's Mac (onemoreizzysmbp), 2026-10-23/24
+| Item | Result |
+|---|---|
+| macOS | 10.15 (Catalina), Intel |
+| Node | v20.20.2 |
+| Install (`npm run install:all`) | PASS: prebuilt binaries, no `EBADENGINE`, no compile (after the Node 20 / esbuild 0.23.1 / TypeScript 5.9 toolchain fix; the first attempt, from an older `main`, failed on esbuild's macOS 12 binary) |
+| Build | PASS |
+| Tests | 84/85 at `c3c9c20`: the one failure was a test race (EPIPE after a test ended), fixed in `7003165`; product checks all passed |
+| Helix UI | PASS: renders; effects governor settled on **High** |
+| Browser | **Firefox 158.0.1** (the default browser; Mnemo opens whatever is default). Safari was not used, so the Safari 13 rendering items below remain unverified and only matter for anyone who runs Mnemo in Safari |
+| Mnemo.app (`launcher`) | PASS: `osacompile` builds the app on Catalina; double-click opens Mnemo; **emblem icon shows in Finder and the Dock** |
+| Not yet run on this Mac | `launcher --at-login` (launchctl), the office hub with `--bind 100.103.16.78`, a second tailnet machine, section 5 filesystem checks, the fps snippet |
+
 ## 0. Record the machine (no pass/fail)
 ```
 sw_vers; uname -m; sysctl -n machdep.cpu.brand_string; sysctl -n hw.memsize
