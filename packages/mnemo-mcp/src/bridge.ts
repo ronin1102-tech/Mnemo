@@ -46,6 +46,9 @@ const STATIC: Record<string, [string, string]> = {
   "/index.html": ["index.html", "text/html; charset=utf-8"],
   "/app.js": ["app.js", "text/javascript; charset=utf-8"],
   "/style.css": ["style.css", "text/css; charset=utf-8"],
+  "/icon-32.png": ["icon-32.png", "image/png"],
+  "/icon-180.png": ["icon-180.png", "image/png"],
+  "/brand-64.png": ["brand-64.png", "image/png"],
 };
 
 const SECURITY_HEADERS = {

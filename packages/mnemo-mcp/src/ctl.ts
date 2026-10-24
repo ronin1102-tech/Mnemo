@@ -261,6 +261,16 @@ function main(argv: string[]) {
       } finally {
         fs.rmSync(src, { force: true });
       }
+      // the logo: the emblem, as the app's icon
+      const icns = path.resolve(path.dirname(ctlPath), "..", "..", "helix", "dist", "mnemo.icns");
+      if (fs.existsSync(icns)) {
+        fs.copyFileSync(icns, path.join(app, "Contents", "Resources", "applet.icns"));
+        try {
+          execFileSync("touch", [app]); // nudge Finder and the Dock to pick up the new icon
+        } catch {
+          /* cosmetic */
+        }
+      }
       out(`Created ${app}: double-click it to open Mnemo (${hubMode ? "office hub" : "this Mac only"}). Drag it to your Dock if you like.`);
       if (atLogin) {
         const mode = hubMode ? "hub" : "ui";
