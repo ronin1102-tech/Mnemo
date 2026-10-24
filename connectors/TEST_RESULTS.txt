@@ -1,0 +1,86 @@
+custom.mnemo test transcript — 2026-10-24T11:49:46Z — node v20.20.2, python Python 3.13.17
+Local launch of the same server command (Linux container, fixture vault: hello.md, this-is-the-beginning.md)
+
+$ client.py list-tools   (names + allowed only)
+protocol 2025-11-25 count 15
+  search_notes allowed
+  read_note allowed
+  list_recent allowed
+  list_notes allowed
+  get_backlinks allowed
+  daily_note -
+  get_neighbors allowed
+  find_similar allowed
+  get_tags allowed
+  list_proposals allowed
+  write_note -
+  append_note -
+  patch_note -
+  move_note -
+  delete_note -
+exit 0
+
+$ client.py call-tool --name read_note  {"path":"hello.md"}
+{
+  "tool": "read_note",
+  "isError": false,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\n  \"path\": \"hello.md\",\n  \"content\": \"# Hello\\nMnemo is connected.\\n\",\n  \"frontmatter\": {\n    \"tags\": []\n  },\n  \"outgoing\": [],\n  \"unresolvedLinks\": [],\n  \"backlinks\": []\n}"
+      }
+    ]
+  }
+}
+exit 0
+
+$ client.py call-tool --name search_notes  {"query":"Beginning"}
+{
+  "tool": "search_notes",
+  "isError": false,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "[\n  {\n    \"path\": \"this-is-the-beginning.md\",\n    \"title\": \"This is the beginning\",\n    \"mtime\": 1792842586639.5999,\n    \"tags\": [],\n    \"created\": null,\n    \"snippet\": \"# This is the [beginning]\\nThe first note in the vault.\\n\"\n  }\n]"
+      }
+    ]
+  }
+}
+exit 0
+
+$ client.py call-tool --name write_note (phase 1)
+custom.mnemo: {"refused": "write_note", "phase": 1, "reason": "tool is not in the active allowlist", "allowed": ["find_similar", "get_backlinks", "get_neighbors", "get_tags", "list_notes", "list_proposals", "list_recent", "read_note", "search_notes"]}
+exit 4
+
+$ python3 -m unittest discover -s tests -v  (with MNEMO_NODE/MNEMO_CLI set)
+test_phase1_refuses_a_write_tool_before_launching_anything (test_client.Allowlist.test_phase1_refuses_a_write_tool_before_launching_anything) ... ok
+test_phase1_refuses_daily_note_and_unknown_tools (test_client.Allowlist.test_phase1_refuses_daily_note_and_unknown_tools) ... ok
+test_phase2_allows_writes_but_still_refuses_unknown_tools (test_client.Allowlist.test_phase2_allows_writes_but_still_refuses_unknown_tools) ... ok
+test_phase_must_be_exactly_1_or_2 (test_client.Allowlist.test_phase_must_be_exactly_1_or_2) ... ok
+test_refusal_reports_the_status_but_never_the_credential (test_client.MuseProxyHelper.test_refusal_reports_the_status_but_never_the_credential) ... ok
+test_tunnels_with_basic_auth_built_at_runtime (test_client.MuseProxyHelper.test_tunnels_with_basic_auth_built_at_runtime) ... ok
+test_unreachable_proxy_and_missing_env_fail_clean (test_client.MuseProxyHelper.test_unreachable_proxy_and_missing_env_fail_clean) ... ok
+test_accepts_the_older_supported_versions_and_refuses_others (test_client.Protocol.test_accepts_the_older_supported_versions_and_refuses_others) ... ok
+test_answers_server_ping_mid_call (test_client.Protocol.test_answers_server_ping_mid_call) ... ok
+test_bad_arguments_file (test_client.Protocol.test_bad_arguments_file) ... ok
+test_handshake_initialized_and_full_pagination (test_client.Protocol.test_handshake_initialized_and_full_pagination) ... ok
+test_iserror_exits_1_and_rpc_error_exits_2_and_neither_retries (test_client.Protocol.test_iserror_exits_1_and_rpc_error_exits_2_and_neither_retries) ... ok
+test_server_dying_is_a_clean_transport_failure (test_client.Protocol.test_server_dying_is_a_clean_transport_failure) ... ok
+test_list_tools_returns_the_full_tool_list (test_client.RealMnemoServer.test_list_tools_returns_the_full_tool_list) ... ok
+test_missing_note_is_iserror_exit_1 (test_client.RealMnemoServer.test_missing_note_is_iserror_exit_1) ... ok
+test_phase2_tool_refused_under_phase1 (test_client.RealMnemoServer.test_phase2_tool_refused_under_phase1) ... ok
+test_read_note_hello (test_client.RealMnemoServer.test_read_note_hello) ... ok
+test_search_finds_beginning (test_client.RealMnemoServer.test_search_finds_beginning) ... ok
+test_no_proxy_env_means_nothing_is_attempted (test_client.SshRoute.test_no_proxy_env_means_nothing_is_attempted) ... ok
+test_only_tailnet_hosts_are_accepted (test_client.SshRoute.test_only_tailnet_hosts_are_accepted) ... ok
+test_remote_command_is_shell_quoted (test_client.SshRoute.test_remote_command_is_shell_quoted) ... ok
+test_server_command_must_be_absolute (test_client.SshRoute.test_server_command_must_be_absolute) ... ok
+test_shipped_config_is_phase_1_and_valid (test_client.SshRoute.test_shipped_config_is_phase_1_and_valid) ... ok
+test_ssh_argv_is_batch_mode_via_the_proxy_helper_and_carries_no_credential (test_client.SshRoute.test_ssh_argv_is_batch_mode_via_the_proxy_helper_and_carries_no_credential) ... ok
+
+----------------------------------------------------------------------
+Ran 24 tests in 4.051s
+
+OK

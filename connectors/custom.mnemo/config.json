@@ -1,0 +1,20 @@
+{
+  "phase": 1,
+  "transport": "ssh",
+  "ssh": {
+    "host": "100.103.16.78",
+    "user": "onemoretimetrizzy",
+    "identity_file": "~/.ssh/id_ed25519",
+    "proxy": "muse",
+    "proxy_port": 3130,
+    "connect_timeout_seconds": 15
+  },
+  "server_command": [
+    "/Users/onemoretimetrizzy/.nvm/versions/node/v20.20.2/bin/node",
+    "/Users/onemoretimetrizzy/Mnemo-main/packages/mnemo-mcp/dist/cli.js",
+    "--vault",
+    "/Users/onemoretimetrizzy/Mnemo-Vault",
+    "serve"
+  ],
+  "timeouts": { "initialize_seconds": 45, "call_seconds": 120 }
+}
