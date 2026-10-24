@@ -3,7 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { startBridge } from "./bridge.js";
+import { isAllowedBind, startBridge } from "./bridge.js";
+import { TokenStore } from "./tokens.js";
 import { graphPayload } from "./graph.js";
 import { Index } from "./indexer.js";
 import { ProposalStore, type ProposalStatus } from "./proposals.js";
@@ -20,8 +21,13 @@ const USAGE = `mnemo-ctl [--vault <dir>] [--read-only] <command>      (human-onl
   export-graph [--out f.js]  Write graph data for the Helix UI (default: JSON on stdout)
   ui [--port 7337] [--no-open]  Serve the live Helix UI on 127.0.0.1 and open it: live data,
                            gold proposal pulse, approve/reject in view (same writer as approve)
+  hub [--bind <tailscale ip>] [--allow-host <magicdns name>] [--port 7337] [--no-open]
+                           The shared vault for your tailnet: the Helix for people and MCP over
+                           HTTP (/mcp) for agents. Listens only on 127.0.0.1 and Tailscale addresses.
+  token add <name> --agent|--person [--read-only]   Issue a key for one machine or person
+  token list | token revoke <name>
 
---read-only refuses approve, reject and purge-trash (and removes them from the UI).
+--read-only refuses approve, reject and purge-trash (and removes them from the UI); with token add, issues a read-only key.
 `;
 
 /** Open a URL in the default browser (macOS, Windows, Linux). */
@@ -41,6 +47,9 @@ function main(argv: string[]) {
   let port = 7337;
   let noOpen = false;
   let uiOverride: string | undefined;
+  const bind: string[] = [];
+  const allowHosts: string[] = [];
+  let kind: "agent" | "person" | undefined;
   const args: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--vault") vaultDir = argv[++i];
@@ -49,12 +58,16 @@ function main(argv: string[]) {
     else if (argv[i] === "--port") port = Number(argv[++i]);
     else if (argv[i] === "--no-open") noOpen = true;
     else if (argv[i] === "--ui") uiOverride = argv[++i];
+    else if (argv[i] === "--bind") bind.push(argv[++i]);
+    else if (argv[i] === "--allow-host") allowHosts.push(argv[++i]);
+    else if (argv[i] === "--agent") kind = "agent";
+    else if (argv[i] === "--person") kind = "person";
     else args.push(argv[i]);
   }
-  const [cmd, arg] = args;
+  const [cmd, arg, arg2] = args;
   if (!cmd || cmd === "help") return void process.stderr.write(USAGE);
   if (!vaultDir) throw new VaultError("No vault: pass --vault <dir> or set MNEMO_VAULT");
-  const mutating = ["approve", "reject", "purge-trash"].includes(cmd);
+  const mutating = ["approve", "reject", "purge-trash"].includes(cmd); // for `token add`, --read-only means "issue a read-only key"
   if (mutating && readOnly) throw new VaultError(`Refusing ${cmd}: read-only mode`);
   const vault = new Vault(path.resolve(vaultDir));
   const store = new ProposalStore(vault);
@@ -94,19 +107,62 @@ function main(argv: string[]) {
       else out(json);
       return;
     }
-    case "ui": {
+    case "ui":
+    case "hub": {
+      const hub = cmd === "hub";
       const uiDir = uiOverride ? path.resolve(uiOverride) : path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "helix", "dist");
       if (!fs.existsSync(path.join(uiDir, "index.html"))) throw new VaultError(`Helix UI not built in ${uiDir}: run \`npm run build\` first`);
-      startBridge(vault, { port, uiDir, readOnly })
+      if (!hub && (bind.length || allowHosts.length)) throw new VaultError("--bind and --allow-host are for `hub`; `ui` stays on this computer only");
+      for (const a of bind) if (!isAllowedBind(a)) throw new VaultError(`Refusing to listen on ${a}: only 127.0.0.1 and Tailscale addresses (100.x / fd7a:115c:a1e0::) are allowed`);
+      startBridge(vault, { port, uiDir, readOnly, mcp: hub, bind, allowHosts })
         .then((b) => {
-          process.stderr.write(`mnemo: Helix UI for ${vault.root}${readOnly ? " (read-only)" : ""}\n  ${b.url}\n  local only (127.0.0.1). The link holds this session's key: don't share it. Ctrl+C to stop.\n`);
+          const names = [...bind.map((a) => (a.includes(":") ? `[${a}]` : a)), ...allowHosts];
+          const lines = [
+            `mnemo: ${hub ? "hub" : "Helix UI"} for ${vault.root}${readOnly ? " (read-only)" : ""}`,
+            `  This computer:  ${b.url}`,
+            `                  (the link holds this session's key: don't share it)`,
+          ];
+          if (hub) {
+            lines.push(`  Agents (MCP):   http://127.0.0.1:${b.port}/mcp` + names.map((n) => `\n                  http://${n}:${b.port}/mcp`).join(""));
+            lines.push(`                  header  Authorization: Bearer <agent key>   (mnemo-ctl token add <name> --agent)`);
+            if (names.length) lines.push(`  People (Helix): http://${names[names.length - 1]}:${b.port}/#token=<person key>   (mnemo-ctl token add <name> --person)`);
+            else lines.push(`  Only this computer can connect. For other tailnet machines add --bind <this Mac's Tailscale IP> [--allow-host <its MagicDNS name>].`);
+            const keys = new TokenStore(vault).list();
+            lines.push(`  Keys: ${keys.length ? keys.map((k) => `${k.name} (${k.kind}${k.readOnly ? ", read-only" : ""})`).join(", ") : "none yet"}`);
+          } else lines.push("  Local only (127.0.0.1).");
+          lines.push("  Ctrl+C to stop.");
+          process.stderr.write(lines.join("\n") + "\n");
           if (!noOpen) openBrowser(b.url);
         })
         .catch((e) => {
-          process.stderr.write(`mnemo-ctl: ${e && e.code === "EADDRINUSE" ? `port ${port} is in use; try --port <n>` : e instanceof Error ? e.message : e}\n`);
+          process.stderr.write(`mnemo-ctl: ${e && e.code === "EADDRINUSE" ? `port ${port} is in use; try --port <n>` : e && e.code === "EADDRNOTAVAIL" ? `this computer doesn't have that address (is Tailscale connected?): ${e.address}` : e instanceof Error ? e.message : e}\n`);
           process.exitCode = 1;
         });
       return;
+    }
+    case "token": {
+      const keys = new TokenStore(vault);
+      if (arg === "list" || !arg) {
+        const all = keys.list();
+        if (!all.length) out("no keys. Create one: mnemo-ctl token add <name> --agent | --person [--read-only]");
+        for (const k of all) out(`${k.name.padEnd(24)} ${k.kind.padEnd(6)} ${k.readOnly ? "read-only " : "          "} created ${k.createdAt}`);
+        return;
+      }
+      if (arg === "add" && arg2) {
+        if (!kind) throw new VaultError("Say what the key is for: --agent (MCP tools) or --person (the Helix)");
+        const secret = keys.add(arg2, kind, readOnly);
+        out(secret);
+        process.stderr.write(
+          `\nKey "${arg2}" (${kind}${readOnly ? ", read-only" : ""}) created. It is shown once, above; store it on that machine only.\n` +
+            (kind === "agent"
+              ? `Agent setup: MCP URL http://<this Mac>:<port>/mcp, header "Authorization: Bearer <key>". Proposals it makes are recorded as "${arg2}".\n`
+              : `Person setup: open http://<this Mac>:<port>/#token=<key> in a browser. Approvals are recorded as "${arg2}".\n`) +
+            `Revoke any time: mnemo-ctl token revoke ${arg2}\n`,
+        );
+        return;
+      }
+      if (arg === "revoke" && arg2) return out(keys.revoke(arg2) ? `revoked ${arg2}` : `no key named ${arg2}`);
+      throw new VaultError("token list | token add <name> --agent|--person [--read-only] | token revoke <name>");
     }
     default:
       process.stderr.write(USAGE);

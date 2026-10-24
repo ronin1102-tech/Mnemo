@@ -395,7 +395,8 @@ function linkGroup(label: string, paths: string[]) {
 
 // ---- live mode: the bridge (mnemo-ctl ui) ------------------------------------------
 
-const isLive = window.location.protocol === "http:" && /^(127\.0\.0\.1|localhost)$/.test(window.location.hostname);
+// served by mnemo-ctl ui/hub (this computer, or another machine on the tailnet) rather than opened as a file
+const isLive = window.location.protocol === "http:" || window.location.protocol === "https:";
 let token: string | null = null;
 if (isLive) {
   token = tokenFromHash(window.location.hash);
@@ -435,16 +436,17 @@ async function loadLive() {
   try {
     const r = await api("/api/graph");
     if (r.status === 401) {
-      sourceEl.textContent = "This page needs its session link: open the URL printed by mnemo-ctl ui";
+      sourceEl.textContent = "This page needs its key: open the link from mnemo-ctl ui / hub (or your person key)";
       return;
     }
     const d = (await r.json()) as GraphData;
     liveVersion = d.version || 0;
     liveDown = false;
-    setData(d, `Live vault · ${d.nodes.length.toLocaleString()} notes${d.readOnly ? " · read-only" : ""}`);
+    const viewer = (d as GraphData & { viewer?: string }).viewer;
+    setData(d, `Live vault · ${d.nodes.length.toLocaleString()} notes${viewer && viewer !== "this computer" ? ` · signed in as ${viewer}` : ""}${d.readOnly ? " · read-only" : ""}`);
   } catch (_) {
     liveDown = true;
-    sourceEl.textContent = "Disconnected from mnemo-ctl ui (is it still running?)";
+    sourceEl.textContent = "Disconnected from the Mnemo hub (is it still running, and is Tailscale connected?)";
   } finally {
     liveBusy = false;
   }
@@ -460,7 +462,7 @@ function pollLive() {
     })
     .catch(() => {
       liveDown = true;
-      sourceEl.textContent = "Disconnected from mnemo-ctl ui (is it still running?)";
+      sourceEl.textContent = "Disconnected from the Mnemo hub (is it still running, and is Tailscale connected?)";
     });
 }
 
@@ -882,7 +884,7 @@ proposalsBtn.addEventListener("click", () => {
 
 if (isLive) {
   buildModel(data);
-  sourceEl.textContent = token ? "Connecting to your vault…" : "This page needs its session link: open the URL printed by mnemo-ctl ui";
+  sourceEl.textContent = token ? "Connecting to your vault…" : "This page needs its key: open the link from mnemo-ctl ui / hub (or your person key)";
   if (token) {
     loadLive();
     window.setInterval(pollLive, 2000);

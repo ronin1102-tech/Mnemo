@@ -24,6 +24,11 @@ const fail = (e: unknown) => ({
 export interface ServerOptions {
   /** Do not register any write tool at all. */
   readOnly?: boolean;
+  /**
+   * Who this connection is, from the hub's access key (e.g. "office-thinkcentre"). When set, it is
+   * recorded as the proposer instead of the name the agent reports about itself, which it chooses.
+   */
+  clientName?: string;
 }
 
 export function createServer(vault: Vault, opts: ServerOptions = {}) {
@@ -31,7 +36,8 @@ export function createServer(vault: Vault, opts: ServerOptions = {}) {
   const proposals = new ProposalStore(vault);
   const log = makeLogger(vault);
   const server = new McpServer({ name: "mnemo", version: "0.1.0" });
-  const client = () => server.server.getClientVersion()?.name ?? "unknown";
+  const self = () => server.server.getClientVersion()?.name ?? "unknown";
+  const client = () => (opts.clientName ? `${opts.clientName} (${self()})` : self());
 
   /** Wrap a tool: sync the index, log the call, convert vault errors to tool errors. */
   const tool = <S extends z.ZodRawShape>(

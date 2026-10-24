@@ -80,6 +80,10 @@ Without `graph.js` it shows demo data. Palette is the mark's: deep navy, water-b
 
 `mnemo-ctl --vault V ui` serves the Helix on `http://127.0.0.1:7337` with live data (2 s polling), the gold proposal pulse, and in-view **Approve / Reject** (shown only after the exact diff is on screen; same `ProposalStore.approve()` as the CLI, so stale halts and byte-identical writes hold). It is a human-side bridge, **not** an MCP transport: agents still reach Mnemo only over stdio. Guards, all tested: bound to loopback only; `Host` must be the loopback origin (DNS rebinding); cross-origin `Origin` refused and no CORS headers ever sent; a per-session random token, passed to the page in the URL fragment (never sent over the network, removed from the address bar on load), required on every API call; strict CSP, `nosniff`, no framing; approve/reject only by POST; `--read-only` removes them. Anyone who can run commands as you can still approve proposals (as with the CLI), so the deployment rule stands: don't give an agent both the MCP server and your shell.
 
+## Office: `mnemo-ctl hub` (one vault, many machines over Tailscale)
+
+Decision (Tracy, 2026-10-24): MCP is the main way the tool works, and more machines join one vault. This pulls the scope doc's "later" remote transport forward, restricted to the tailnet. `mnemo-ctl hub --bind <tailscale ip>` serves the Helix to **people** and MCP over HTTP (`/mcp`) to **agents**, listening only on loopback and Tailscale addresses. Access is per machine or person with named keys (`mnemo-ctl token add <name> --agent|--person [--read-only]`, revocable); agent keys can never reach approval; proposals and approvals are recorded by key name. Stdio stays the default; nothing listens unless the hub is started. Setup: `docs/OFFICE_SETUP.md`.
+
 ## Not in V1 (planned V1.1)
 
 Similarity arcs in the UI, the gold proposal pulse with in-view approval, strand filters, tag tints, spatial search lighting, re-basing relative links inside a moved note, a journal/resume for multi-file moves. The packaged standalone app shell (e.g. Electron/Tauri) is also not built yet; today the UI is a static page.

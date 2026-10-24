@@ -98,7 +98,7 @@ describe("bridge: live data and the write gate", () => {
     expect(detail.diff).toContain("+ added by agent");
     const r = await api(`/api/proposals/${p.id}/approve`, { method: "POST" });
     expect(r.status).toBe(200);
-    expect(JSON.parse(r.body).settledBy.actor).toBe("mnemo-ctl");
+    expect(JSON.parse(r.body).settledBy).toEqual({ actor: "helix", user: os.userInfo().username }); // approved in the Helix, by whoever runs it
     expect(fs.readFileSync(path.join(root, "a.md"), "utf8")).toBe(store.get(p.id).changes[0].after!);
     expect(store.get(p.id).status).toBe("approved");
     await b.close();
