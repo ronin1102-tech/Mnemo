@@ -56,12 +56,21 @@ Open `packages/helix/dist/index.html` in your browser:
 
 You'll see the emblem. Click it: the coil rises from the water. Scroll to travel through time; click a note to focus it; Esc to step back; try **Graph**. The header's **Effects** button shows which effects tier your machine settled on.
 
-## 5. Load real notes (a copy)
+## 5. Open your vault live (recommended)
+```
+node packages/mnemo-mcp/dist/ctl.js --vault "/path/to/vault-copy" ui
+```
+Your browser opens the Helix on your real notes, live: edits you make in any other editor appear within about 2 seconds. Notes with a pending agent proposal **pulse gold**; the **◆ proposals** button in the header lists them all, including proposals for notes that don't exist yet. Click **Review changes** to see the exact change, then **Approve** or **Reject**. Approving here is the same action as `mnemo-ctl approve` and writes byte-for-byte what the diff shows.
+- It runs only on this computer (127.0.0.1). The link it prints contains this session's key: don't share it. Ctrl+C in Terminal stops it.
+- `--read-only` shows everything but removes Approve and Reject. `--port 8000` if 7337 is taken. `--no-open` to just print the link.
+- If Safari doesn't open by itself, paste the printed link into it.
+
+## 5b. Or a static snapshot (no server)
 ```
 node packages/mnemo-mcp/dist/ctl.js --vault "/path/to/vault-copy" reindex
 node packages/mnemo-mcp/dist/ctl.js --vault "/path/to/vault-copy" export-graph --out packages/helix/dist/graph.js
 ```
-Reload the page. The header now says `Vault · N notes`. Re-run `export-graph` whenever you want the view refreshed (the UI is a snapshot in V1).
+Reload the page. The header now says `Vault snapshot · N notes`. Re-run `export-graph` whenever you want the view refreshed (the UI is a snapshot in V1).
 No notes handy? Make a synthetic vault: `node packages/mnemo-mcp/scripts/make-vault.mjs ./sample-vault 500`.
 
 ## 6. (Optional) Connect an AI agent and try the write gate

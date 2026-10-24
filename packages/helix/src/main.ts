@@ -6,7 +6,8 @@ import { layoutGraph, layoutHelix, ROW_GAP, timeOf, withinHops } from "./layout"
 import type { GraphPoint, HelixLayout } from "./layout";
 import { drawBackground, drawDust, drawGraph, drawHelix, graphToScreen, helixPos, poolHit } from "./render";
 import type { GraphView } from "./render";
-import type { GraphData } from "./types";
+import { describeProposal, diffLines, expiresLabel, tokenFromHash } from "./live";
+import type { GraphData, PendingProposal } from "./types";
 
 type Mode = "emblem" | "helix" | "graph";
 
@@ -23,34 +24,49 @@ const tipEl = $<HTMLElement>("tip");
 const hintEl = $<HTMLElement>("hint");
 const fxBtn = $<HTMLButtonElement>("fx");
 const segInd = $<HTMLElement>("seg-ind");
+const proposalsBtn = $<HTMLButtonElement>("proposals");
 
 const injected = (window as unknown as { __MNEMO_GRAPH__?: GraphData }).__MNEMO_GRAPH__;
-const data: GraphData = injected || demoData();
-sourceEl.textContent = injected ? `Vault · ${data.nodes.length.toLocaleString()} notes · snapshot ${injected.generatedAt.slice(0, 16).replace("T", " ")}` : "Demo vault · run mnemo-ctl export-graph to load yours";
-$("count").textContent = `${data.nodes.length.toLocaleString()} notes`;
+const EMPTY = new Set<string>();
 
-const layout: HelixLayout = layoutHelix(data);
+// The model is reloadable: in live mode (mnemo-ctl ui) it is replaced whenever the vault changes.
+let data: GraphData = { generatedAt: "", nodes: [], links: [], proposals: [] };
+let layout: HelixLayout = layoutHelix(data);
 // Graph-mode layout is computed on first use, so opening the helix never pays for it.
 let graphPtsCache: Map<string, GraphPoint> | null = null;
 const graphPoints = () => graphPtsCache || (graphPtsCache = layoutGraph(data.nodes, data.links));
-const titles = new Map(data.nodes.map((n) => [n.path, n.title]));
-const notesByPath = new Map(data.nodes.map((n) => [n.path, n]));
-const proposed = new Set(data.proposals.map((p) => p.path));
-const adj = new Map<string, Set<string>>();
-for (const l of data.links) {
-  if (!titles.has(l.src) || !titles.has(l.dst)) continue;
-  if (!adj.has(l.src)) adj.set(l.src, new Set());
-  if (!adj.has(l.dst)) adj.set(l.dst, new Set());
-  adj.get(l.src)!.add(l.dst);
-  adj.get(l.dst)!.add(l.src);
+let titles = new Map<string, string>();
+let notesByPath = new Map<string, GraphData["nodes"][number]>();
+let proposed = new Set<string>();
+let adj = new Map<string, Set<string>>();
+let degree = new Map<string, number>();
+let hubDegree = 2;
+
+function buildModel(d: GraphData) {
+  data = d;
+  layout = layoutHelix(d);
+  graphPtsCache = null;
+  titles = new Map(d.nodes.map((n) => [n.path, n.title]));
+  notesByPath = new Map(d.nodes.map((n) => [n.path, n]));
+  proposed = new Set(d.proposals.map((p) => p.path));
+  adj = new Map();
+  for (const l of d.links) {
+    if (!titles.has(l.src) || !titles.has(l.dst)) continue;
+    if (!adj.has(l.src)) adj.set(l.src, new Set());
+    if (!adj.has(l.dst)) adj.set(l.dst, new Set());
+    adj.get(l.src)!.add(l.dst);
+    adj.get(l.dst)!.add(l.src);
+  }
+  degree = new Map([...adj].map(([p, n]) => [p, n.size]));
+  // roughly the top 8% most-linked notes are hubs (always labelled in graph mode)
+  const ds = [...degree.values()].sort((a, b) => b - a);
+  hubDegree = Math.max(2, ds[Math.floor(ds.length * 0.08)] || 2);
+  $("count").textContent = `${d.nodes.length.toLocaleString()} notes`;
+  const n = d.proposals.length;
+  proposalsBtn.hidden = n === 0;
+  proposalsBtn.textContent = `◆ ${n} proposal${n === 1 ? "" : "s"}`;
+  proposalsBtn.setAttribute("aria-label", `${n} pending agent proposal${n === 1 ? "" : "s"}: review`);
 }
-const EMPTY = new Set<string>();
-const degree = new Map<string, number>([...adj].map(([p, n]) => [p, n.size]));
-/** Roughly the top 8% most-linked notes are hubs (always labelled in graph mode). */
-const hubDegree = (() => {
-  const d = [...degree.values()].sort((a, b) => b - a);
-  return Math.max(2, d[Math.floor(d.length * 0.08)] || 2);
-})();
 const dateOf = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 
 // ---- effects quality --------------------------------------------------------
@@ -205,10 +221,10 @@ function draw() {
   if (emb < 1) drawEmblem(ctx, view, clock, 1 + emb * 0.12, 1 - Math.min(1, emb * 1.6), spec, dpr);
   if (emb > 0) {
     if (mode === "graph") {
-      drawGraph(ctx, view, { pts: graphPoints(), links: data.links, titles, selected, hover, proposed, neighbours: neighbours(), gv, t: clock, fx: spec, selectedAt, alpha: emb, degree, hubDegree });
+      drawGraph(ctx, view, { pts: graphPoints(), links: data.links, titles, selected, hover, proposed, neighbours: neighbours(), gv, t: clock, fx: spec, selectedAt, alpha: emb, degree, hubDegree, flash: flashState() });
     } else {
       const reveal = rising ? easeOut(emb) : 1;
-      drawHelix(ctx, view, { layout, scrollY, selected, hover, proposed, neighbours: neighbours(), reveal, alpha: rising ? 1 : emb, t: clock, fx: spec, selectedAt });
+      drawHelix(ctx, view, { layout, scrollY, selected, hover, proposed, neighbours: neighbours(), reveal, alpha: rising ? 1 : emb, t: clock, fx: spec, selectedAt, flash: flashState() });
     }
   }
   placeTip();
@@ -291,6 +307,7 @@ function select(path: string | null, reveal = true) {
 function showDetail(path: string) {
   const note = notesByPath.get(path);
   if (!note) return;
+  cardMode = "note";
   const out = data.links.filter((l) => l.src === path && titles.has(l.dst)).map((l) => l.dst);
   const inn = data.links.filter((l) => l.dst === path && titles.has(l.src)).map((l) => l.src);
   const props = data.proposals.filter((p) => p.path === path);
@@ -309,7 +326,7 @@ function showDetail(path: string) {
     for (const t of note.tags) tags.appendChild(el("span", "tag", "#" + t));
     detailEl.appendChild(tags);
   }
-  for (const p of props) detailEl.appendChild(el("p", "proposal proposal-note", `An agent (${p.client}) proposes to ${p.op} this note. Review: mnemo-ctl show ${p.id}`));
+  for (const p of props) detailEl.appendChild(proposalBox(p));
   detailEl.appendChild(depthControl(path));
   const cols = el("div", "link-cols", "");
   cols.appendChild(linkGroup("Links to", out));
@@ -345,6 +362,7 @@ function depthControl(path: string) {
 }
 
 function hideDetail() {
+  cardMode = "note";
   detailEl.classList.remove("open");
   detailEl.hidden = true;
   detailEl.innerHTML = "";
@@ -373,6 +391,199 @@ function linkGroup(label: string, paths: string[]) {
   if (!paths.length) ul.appendChild(el("li", "none", "None"));
   wrap.appendChild(ul);
   return wrap;
+}
+
+// ---- live mode: the bridge (mnemo-ctl ui) ------------------------------------------
+
+const isLive = window.location.protocol === "http:" && /^(127\.0\.0\.1|localhost)$/.test(window.location.hostname);
+let token: string | null = null;
+if (isLive) {
+  token = tokenFromHash(window.location.hash);
+  try {
+    if (token) window.sessionStorage.setItem("mnemo.token", token);
+    else token = window.sessionStorage.getItem("mnemo.token");
+  } catch (_) { /* storage blocked: the token still works for this page load */ }
+  // keep the session key out of the address bar, history and screenshots
+  if (window.location.hash) window.history.replaceState(null, "", window.location.pathname + window.location.search);
+}
+let liveVersion = 0;
+let liveBusy = false;
+let liveDown = false;
+
+function api(pathname: string, method = "GET"): Promise<Response> {
+  return fetch(pathname, { method, headers: { "X-Mnemo-Token": token || "" }, credentials: "omit", cache: "no-store" });
+}
+
+/** Swap in a new model, keeping the user's place: selection, focus card, scroll. */
+function setData(d: GraphData, label: string) {
+  const keep = selected;
+  buildModel(d);
+  for (const li of rows.values()) li.remove();
+  rows.clear();
+  sourceEl.textContent = label;
+  if (keep && !notesByPath.has(keep)) select(null, false);
+  else if (keep && mode !== "emblem" && cardMode === "note") showDetail(keep);
+  if (cardMode === "proposals") showProposals();
+  scrollTarget = clamp(scrollTarget);
+  renderList();
+  request();
+}
+
+async function loadLive() {
+  if (liveBusy) return;
+  liveBusy = true;
+  try {
+    const r = await api("/api/graph");
+    if (r.status === 401) {
+      sourceEl.textContent = "This page needs its session link: open the URL printed by mnemo-ctl ui";
+      return;
+    }
+    const d = (await r.json()) as GraphData;
+    liveVersion = d.version || 0;
+    liveDown = false;
+    setData(d, `Live vault · ${d.nodes.length.toLocaleString()} notes${d.readOnly ? " · read-only" : ""}`);
+  } catch (_) {
+    liveDown = true;
+    sourceEl.textContent = "Disconnected from mnemo-ctl ui (is it still running?)";
+  } finally {
+    liveBusy = false;
+  }
+}
+
+/** Poll for changes every 2 s while visible: notes edited on disk, proposals arriving or settling. */
+function pollLive() {
+  if (!isLive || !token || liveBusy || document.hidden) return;
+  api("/api/version")
+    .then((r) => r.json())
+    .then((v: { version: number }) => {
+      if (liveDown || v.version !== liveVersion) loadLive();
+    })
+    .catch(() => {
+      liveDown = true;
+      sourceEl.textContent = "Disconnected from mnemo-ctl ui (is it still running?)";
+    });
+}
+
+// a settled proposal makes its note flash once (helix spec section 4: no silent changes)
+let flash: { path: string; at: number; ok: boolean } | null = null;
+function flashState() {
+  if (!flash) return null;
+  const age = (performance.now() - flash.at) / 1000;
+  if (age > 1.2) {
+    flash = null;
+    return null;
+  }
+  return { path: flash.path, age: age / 1.2, ok: flash.ok };
+}
+
+let cardMode: "note" | "proposals" = "note";
+
+/** One pending proposal: what the agent asks, the exact diff, and (live, not read-only) Approve / Reject. */
+function proposalBox(p: PendingProposal): HTMLElement {
+  const box = el("section", "proposal-box", "");
+  box.appendChild(el("p", "proposal proposal-eyebrow", "◆ An agent is asking"));
+  box.appendChild(el("p", "proposal-what", describeProposal(p)));
+  const meta = [p.createdAt ? `proposed ${p.createdAt.slice(0, 16).replace("T", " ")}` : "", expiresLabel(p.expiresAt, Date.now())].filter(Boolean).join(" · ");
+  if (meta) box.appendChild(el("p", "proposal-meta", meta));
+  if (!isLive) {
+    box.appendChild(el("p", "proposal-meta", `Review on the command line: mnemo-ctl show ${p.id}, then approve or reject. For approval in this view, open it with mnemo-ctl ui.`));
+    return box;
+  }
+  const status = el("p", "proposal-status", "");
+  status.setAttribute("role", "status");
+  const actions = el("div", "proposal-actions", "");
+  const review = el("button", "proposal-review", "Review changes") as HTMLButtonElement;
+  review.type = "button";
+  actions.appendChild(review);
+  box.appendChild(actions);
+  box.appendChild(status);
+  review.addEventListener("click", async () => {
+    review.disabled = true;
+    status.textContent = "Loading the exact change…";
+    try {
+      const r = await api(`/api/proposals/${p.id}`);
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || r.statusText);
+      const pre = el("pre", "proposal-diff", "");
+      pre.setAttribute("aria-label", "Proposed change, line by line");
+      for (const line of diffLines(d.diff)) {
+        const text = line.text === "" && line.kind !== "note" ? "(empty line)" : line.text;
+        const span = el("span", "d-" + line.kind + (line.text === "" ? " d-empty" : ""), (line.kind === "add" ? "+ " : line.kind === "del" ? "− " : line.kind === "ctx" ? "  " : "") + text);
+        pre.appendChild(span);
+      }
+      box.insertBefore(pre, actions);
+      if (d.touches && d.touches.length > 1) box.insertBefore(el("p", "proposal-meta", `Also updates links in: ${d.touches.slice(1).join(", ")}`), actions);
+      actions.innerHTML = "";
+      status.textContent = "";
+      if (data.readOnly) {
+        status.textContent = "Read-only session: approve or reject with mnemo-ctl.";
+        return;
+      }
+      // approval is only offered once the exact change is on screen
+      const approve = el("button", "proposal-approve", "Approve") as HTMLButtonElement;
+      const reject = el("button", "proposal-reject", "Reject") as HTMLButtonElement;
+      approve.type = reject.type = "button";
+      approve.setAttribute("aria-label", `Approve: ${describeProposal(p)}`);
+      reject.setAttribute("aria-label", `Reject: ${describeProposal(p)}`);
+      actions.appendChild(approve);
+      actions.appendChild(reject);
+      const settle = async (verb: "approve" | "reject") => {
+        approve.disabled = reject.disabled = true;
+        status.textContent = verb === "approve" ? "Writing…" : "Rejecting…";
+        try {
+          const r2 = await api(`/api/proposals/${p.id}/${verb}`, "POST");
+          const res = await r2.json();
+          if (!r2.ok) {
+            status.textContent = res.status === "stale" ? "Not applied: the note changed since the agent proposed this. Ask the agent to propose again." : `Not applied: ${res.error || r2.statusText}`;
+          } else {
+            status.textContent = verb === "approve" ? "Approved and written." : "Rejected. Nothing was written.";
+            flash = { path: res.to || res.path, at: performance.now(), ok: verb === "approve" };
+            liveEl.textContent = status.textContent;
+          }
+        } catch (_) {
+          status.textContent = "Could not reach mnemo-ctl ui.";
+        }
+        await loadLive();
+      };
+      approve.addEventListener("click", () => settle("approve"));
+      reject.addEventListener("click", () => settle("reject"));
+      approve.focus();
+    } catch (e) {
+      status.textContent = `Could not load the change: ${e instanceof Error ? e.message : e}`;
+      review.disabled = false;
+    }
+  });
+  return box;
+}
+
+/** All pending proposals, including ones for notes that don't exist yet (no node to click). */
+function showProposals() {
+  cardMode = "proposals";
+  detailEl.innerHTML = "";
+  const close = el("button", "card-close", "×") as HTMLButtonElement;
+  close.type = "button";
+  close.setAttribute("aria-label", "Close proposals");
+  close.addEventListener("click", () => hideDetail());
+  detailEl.appendChild(close);
+  detailEl.appendChild(el("p", "eyebrow", `${data.proposals.length} pending`));
+  detailEl.appendChild(el("h2", "card-title", "Agent proposals"));
+  if (!data.proposals.length) detailEl.appendChild(el("p", "excerpt", "Nothing is waiting. Agents' proposals appear here."));
+  for (const p of data.proposals) {
+    const box = proposalBox(p);
+    if (notesByPath.has(p.path)) {
+      const go = el("button", "linkbtn", `Show ${titles.get(p.path) || p.path} in the helix`) as HTMLButtonElement;
+      go.type = "button";
+      go.addEventListener("click", () => select(p.path));
+      box.appendChild(go);
+    }
+    detailEl.appendChild(box);
+  }
+  if (detailEl.hidden) {
+    detailEl.hidden = false;
+    detailEl.classList.remove("open");
+    requestAnimationFrame(() => detailEl.classList.add("open"));
+  }
+  request();
 }
 
 // ---- hover tooltip ----------------------------------------------------------------
@@ -664,6 +875,25 @@ fxBtn.addEventListener("click", () => {
 window.addEventListener("resize", resize);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) { lastT = 0; hold(); request(); } });
 
+proposalsBtn.addEventListener("click", () => {
+  if (mode === "emblem") setMode("helix");
+  showProposals();
+});
+
+if (isLive) {
+  buildModel(data);
+  sourceEl.textContent = token ? "Connecting to your vault…" : "This page needs its session link: open the URL printed by mnemo-ctl ui";
+  if (token) {
+    loadLive();
+    window.setInterval(pollLive, 2000);
+  }
+} else {
+  const d = injected || demoData();
+  buildModel(d);
+  sourceEl.textContent = injected
+    ? `Vault snapshot · ${d.nodes.length.toLocaleString()} notes · ${injected.generatedAt.slice(0, 16).replace("T", " ")}`
+    : "Demo vault · run mnemo-ctl ui to open yours";
+}
 updateFxButton();
 resize();
 setMode("emblem");

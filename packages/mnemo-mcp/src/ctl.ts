@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import path from "node:path";
-import { Index, type NoteMeta } from "./indexer.js";
-import { parseFrontmatter } from "./links.js";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { startBridge } from "./bridge.js";
+import { graphPayload } from "./graph.js";
+import { Index } from "./indexer.js";
 import { ProposalStore, type ProposalStatus } from "./proposals.js";
 import { Vault, VaultError } from "./vault.js";
 
@@ -15,26 +18,37 @@ const USAGE = `mnemo-ctl [--vault <dir>] [--read-only] <command>      (human-onl
   reindex                  Rebuild the search index from the markdown files
   purge-trash              Permanently delete .mnemo/trash
   export-graph [--out f.js]  Write graph data for the Helix UI (default: JSON on stdout)
+  ui [--port 7337] [--no-open]  Serve the live Helix UI on 127.0.0.1 and open it: live data,
+                           gold proposal pulse, approve/reject in view (same writer as approve)
 
---read-only refuses approve, reject and purge-trash.
+--read-only refuses approve, reject and purge-trash (and removes them from the UI).
 `;
 
-/** First ~160 characters of the body, without frontmatter or the leading heading. */
-function excerpt(text: string): string {
-  const body = parseFrontmatter(text).body.replace(/^\s*#\s+.*\n?/, "");
-  const flat = body.replace(/\[\[([^\]|#]*)[^\]]*\]\]/g, "$1").replace(/[#*_`>]/g, "").replace(/\s+/g, " ").trim();
-  return flat.length > 160 ? flat.slice(0, 159) + "…" : flat;
+/** Open a URL in the default browser (macOS, Windows, Linux). */
+function openBrowser(url: string) {
+  const [cmd, args] = process.platform === "darwin" ? ["open", [url]] : process.platform === "win32" ? ["cmd", ["/c", "start", "", url]] : ["xdg-open", [url]];
+  try {
+    spawn(cmd as string, args as string[], { stdio: "ignore", detached: true }).unref();
+  } catch {
+    /* the URL is printed; the user can open it */
+  }
 }
 
 function main(argv: string[]) {
   let vaultDir = process.env.MNEMO_VAULT;
   let readOnly = process.env.MNEMO_READ_ONLY === "1";
   let outFile: string | undefined;
+  let port = 7337;
+  let noOpen = false;
+  let uiOverride: string | undefined;
   const args: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--vault") vaultDir = argv[++i];
     else if (argv[i] === "--read-only") readOnly = true;
     else if (argv[i] === "--out") outFile = argv[++i];
+    else if (argv[i] === "--port") port = Number(argv[++i]);
+    else if (argv[i] === "--no-open") noOpen = true;
+    else if (argv[i] === "--ui") uiOverride = argv[++i];
     else args.push(argv[i]);
   }
   const [cmd, arg] = args;
@@ -74,13 +88,24 @@ function main(argv: string[]) {
     case "export-graph": {
       const index = new Index(vault);
       index.sync();
-      const graph = index.graph();
-      for (const n of graph.nodes as (NoteMeta & { excerpt?: string })[]) n.excerpt = excerpt(vault.read(n.path));
-      const pending = store.list("pending").map((p) => ({ id: p.id, path: p.path, op: p.op, client: p.client }));
-      const json = JSON.stringify({ generatedAt: new Date().toISOString(), ...graph, proposals: pending });
+      const json = JSON.stringify(graphPayload(vault, index, store));
       index.close();
       if (outFile) fs.writeFileSync(outFile, `window.__MNEMO_GRAPH__ = ${json};\n`);
       else out(json);
+      return;
+    }
+    case "ui": {
+      const uiDir = uiOverride ? path.resolve(uiOverride) : path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "helix", "dist");
+      if (!fs.existsSync(path.join(uiDir, "index.html"))) throw new VaultError(`Helix UI not built in ${uiDir}: run \`npm run build\` first`);
+      startBridge(vault, { port, uiDir, readOnly })
+        .then((b) => {
+          process.stderr.write(`mnemo: Helix UI for ${vault.root}${readOnly ? " (read-only)" : ""}\n  ${b.url}\n  local only (127.0.0.1). The link holds this session's key: don't share it. Ctrl+C to stop.\n`);
+          if (!noOpen) openBrowser(b.url);
+        })
+        .catch((e) => {
+          process.stderr.write(`mnemo-ctl: ${e && e.code === "EADDRINUSE" ? `port ${port} is in use; try --port <n>` : e instanceof Error ? e.message : e}\n`);
+          process.exitCode = 1;
+        });
       return;
     }
     default:

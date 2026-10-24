@@ -84,7 +84,27 @@ body[data-mode="emblem"] .hint { opacity: 0; }
 
 /* Gold: agent proposals only. */
 .proposal { color: var(--gold); }
-.proposal-note { margin: 12px 0 0; padding: 9px 11px; border-radius: 10px; font-size: 12px; border: 1px solid var(--gold); background: rgba(10, 22, 56, 0.6); }
+.proposal-chip { margin-left: 14px; color: var(--gold); border-color: var(--gold); }
+.proposal-chip:hover { color: #fff; border-color: var(--gold); }
+.proposal-box { margin: 14px 0 0; padding: 12px 13px; border-radius: 12px; border: 1px solid var(--gold); background: rgba(5, 12, 36, 0.55); }
+.proposal-eyebrow { margin: 0 0 4px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+.proposal-what { margin: 0; font-size: 13px; color: var(--text); }
+.proposal-meta { margin: 4px 0 0; font-size: 11px; color: var(--muted); }
+.proposal-status { margin: 6px 0 0; font-size: 12px; color: var(--text); }
+.proposal-status:empty { display: none; }
+.proposal-actions { display: flex; margin-top: 10px; }
+.proposal-actions button { margin-right: 8px; padding: 6px 14px; border-radius: 8px; cursor: pointer; font-size: 13px; }
+.proposal-review, .proposal-reject { border: 1px solid var(--line-hi); background: rgba(3, 8, 26, 0.6); color: var(--text); }
+.proposal-approve { border: 1px solid var(--gold); background: rgba(224, 176, 64, 0.16); color: var(--gold); font-weight: 600; }
+.proposal-approve:hover { background: rgba(224, 176, 64, 0.26); }
+.proposal-actions button[disabled] { opacity: .5; cursor: default; }
+.proposal-diff { margin: 10px 0 0; max-height: 220px; overflow: auto; padding: 8px 10px; border-radius: 8px; background: rgba(0, 4, 16, 0.65); border: 1px solid var(--line); font: 12px/1.5 Menlo, Monaco, Consolas, monospace; white-space: pre-wrap; word-break: break-word; }
+.proposal-diff span { display: block; }
+.proposal-diff .d-add { color: #e6eefc; background: rgba(143, 188, 255, 0.14); }
+.proposal-diff .d-del { color: var(--dim); text-decoration: line-through; }
+.proposal-diff .d-ctx { color: var(--muted); }
+.proposal-diff .d-note { color: var(--accent); font-style: italic; }
+.proposal-diff .d-empty { font-style: italic; opacity: .75; }
 .badge.proposal { border: 1px solid var(--gold); border-radius: 999px; font-size: 10px; padding: 0 7px; margin-left: 8px; align-self: center; }
 
 /* ---- strand list ---- */
@@ -131,6 +151,7 @@ body[data-mode="emblem"] .hint { opacity: 0; }
   .wordmark { font-size: 14px; letter-spacing: .16em; }
   .seg button { padding: 6px 10px; }
   .chip { margin-left: auto; padding: 5px 10px; }
+  .proposal-chip { margin-left: 8px; }
   #fx-label { display: none; }
   .fx-icon { margin-right: 0; }
   .hint { display: none; }
