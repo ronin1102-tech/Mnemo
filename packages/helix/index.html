@@ -19,6 +19,7 @@
     <button type="button" data-mode="emblem" aria-pressed="true">Emblem</button>
     <button type="button" data-mode="helix" aria-pressed="false">Helix</button>
     <button type="button" data-mode="graph" aria-pressed="false">Graph</button>
+    <button type="button" data-mode="read" aria-pressed="false">Read</button>
   </nav>
   <span id="source" class="source"></span>
   <button type="button" id="proposals" class="chip proposal-chip" hidden></button>
@@ -29,7 +30,18 @@
     <canvas id="stage" tabindex="0" role="application" aria-label="Mnemo emblem. Press Enter to open the helix."></canvas>
     <div id="tip" class="tip" hidden></div>
     <section id="detail" class="card" aria-live="off" hidden></section>
-    <p id="hint" class="hint">Scroll to travel through time · click a note to focus · Esc to step back</p>
+    <p id="hint" class="hint">Scroll to travel through time · click a note to focus · double-click to read · Esc to step back</p>
+    <section id="reader" class="reader" aria-label="Reader" hidden>
+      <div class="reader-bar">
+        <button type="button" id="reader-back" class="reader-back"><span aria-hidden="true">←</span> <span id="reader-back-label">Helix</span></button>
+        <span id="reader-crumb" class="reader-crumb"></span>
+        <button type="button" id="reader-size" class="chip reader-size" aria-label="Text size">Aa</button>
+        <span id="reader-progress" class="reader-progress" aria-hidden="true"></span>
+      </div>
+      <div id="reader-scroll" class="reader-scroll" tabindex="-1">
+        <article id="reader-doc" class="reader-doc"></article>
+      </div>
+    </section>
   </section>
   <aside class="panel" aria-labelledby="list-h">
     <div class="panel-head">

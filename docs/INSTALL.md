@@ -54,7 +54,7 @@ Open `packages/helix/dist/index.html` in your browser:
 - Windows: `start packages\helix\dist\index.html`
 - Linux: `xdg-open packages/helix/dist/index.html`
 
-You'll see the emblem. Click it: the coil rises from the water. Scroll to travel through time; click a note to focus it; Esc to step back; try **Graph**. The header's **Effects** button shows which effects tier your machine settled on.
+You'll see the emblem. Click it: the coil rises from the water. Scroll to travel through time; click a note to focus it; Esc to step back; try **Graph**. To read a whole note, press **Read the whole note** on its card, double-click it, or open the **Read** tab (Esc goes back; **Aa** changes the text size). The header's **Effects** button shows which effects tier your machine settled on.
 
 ## 5. Open your vault live (recommended)
 ```

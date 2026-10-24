@@ -7,9 +7,13 @@ import type { GraphPoint, HelixLayout } from "./layout";
 import { drawBackground, drawDust, drawGraph, drawHelix, graphToScreen, helixPos, poolHit } from "./render";
 import type { GraphView } from "./render";
 import { describeProposal, diffLines, expiresLabel, tokenFromHash } from "./live";
-import type { GraphData, PendingProposal } from "./types";
+import { makeResolver, parseBlocks, plainText, slug, stripFrontmatter, wordCount } from "./markdown";
+import { renderBlocks } from "./reader";
+import type { ReaderLinks } from "./reader";
+import type { GraphData, NoteNode, PendingProposal } from "./types";
 
-type Mode = "emblem" | "helix" | "graph";
+type Mode = "emblem" | "helix" | "graph" | "read";
+type StageMode = Exclude<Mode, "read">;
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const canvas = $<HTMLCanvasElement>("stage");
@@ -41,6 +45,7 @@ let proposed = new Set<string>();
 let adj = new Map<string, Set<string>>();
 let degree = new Map<string, number>();
 let hubDegree = 2;
+let resolveLink: (target: string) => string | null = () => null;
 
 function buildModel(d: GraphData) {
   data = d;
@@ -48,6 +53,7 @@ function buildModel(d: GraphData) {
   graphPtsCache = null;
   titles = new Map(d.nodes.map((n) => [n.path, n.title]));
   notesByPath = new Map(d.nodes.map((n) => [n.path, n]));
+  resolveLink = makeResolver(d.nodes.map((n) => n.path));
   proposed = new Set(d.proposals.map((p) => p.path));
   adj = new Map();
   for (const l of d.links) {
@@ -64,7 +70,8 @@ function buildModel(d: GraphData) {
   $("count").textContent = `${notesLabel(d.nodes.length)}`;
   const n = d.proposals.length;
   proposalsBtn.hidden = n === 0;
-  proposalsBtn.textContent = `◆ ${n} proposal${n === 1 ? "" : "s"}`;
+  proposalsBtn.textContent = `◆ ${n}`;
+  proposalsBtn.appendChild(el("span", "chip-word", ` proposal${n === 1 ? "" : "s"}`));
   proposalsBtn.setAttribute("aria-label", `${n} pending agent proposal${n === 1 ? "" : "s"}: review`);
 }
 const dateOf = (ms: number) => new Date(ms).toISOString().slice(0, 10);
@@ -155,6 +162,7 @@ function touch() {
 /** One frame: advance transitions and easing, draw, and keep looping only while something moves. */
 function frame(ts: number) {
   raf = 0;
+  if (mode === "read") { lastT = 0; return; } // the canvas is hidden behind the reader: draw nothing
   const dt = lastT ? Math.min(64, ts - lastT) : 16;
   lastT = ts;
   const spec = fx();
@@ -236,19 +244,30 @@ function draw() {
 function setMode(m: Mode) {
   mode = m;
   hold();
+  for (const b of document.querySelectorAll<HTMLButtonElement>(".seg [data-mode]")) b.setAttribute("aria-pressed", String(b.dataset.mode === m));
+  placeSegIndicator();
+  document.body.setAttribute("data-mode", m);
+  hover = null;
+  readerEl.hidden = m !== "read";
+  if (m === "read") {
+    hideDetail();
+    tipEl.hidden = true;
+    $("reader-back-label").textContent = lastStage.charAt(0).toUpperCase() + lastStage.slice(1);
+    openReader(selected);
+    readerScroll.focus();
+    return;
+  }
+  readerReq++; // drop any note still loading
+  lastStage = m;
   embTarget = m === "emblem" ? 0 : 1;
   // The rise plays once, when the vault is first opened; later switches are a quick crossfade.
   rising = m === "helix" && !risePlayed && !reduceMotion && emb < 1;
   if (m !== "emblem") risePlayed = true;
   embMs = rising ? 1200 : 300;
-  for (const b of document.querySelectorAll<HTMLButtonElement>(".seg [data-mode]")) b.setAttribute("aria-pressed", String(b.dataset.mode === m));
-  placeSegIndicator();
   canvas.setAttribute("aria-label", canvasLabel());
-  document.body.setAttribute("data-mode", m);
   if (m === "graph" && !graphFitted) fitGraph();
   if (m === "emblem") hideDetail();
   else if (selected) showDetail(selected);
-  hover = null;
   request();
 }
 
@@ -298,7 +317,8 @@ function select(path: string | null, reveal = true) {
       if (n) scrollTarget = clamp(n.y - view.h * at);
     }
   }
-  if (path && mode !== "emblem") showDetail(path);
+  if (mode === "read") openReader(path);
+  else if (path && mode !== "emblem") showDetail(path);
   else hideDetail();
   request();
 }
@@ -322,6 +342,10 @@ function showDetail(path: string) {
   detailEl.appendChild(el("h2", "card-title", note.title));
   detailEl.appendChild(el("p", "card-path", note.path));
   if (note.excerpt) detailEl.appendChild(el("p", "excerpt", note.excerpt));
+  const read = el("button", "read-btn", "Read the whole note") as HTMLButtonElement;
+  read.type = "button";
+  read.addEventListener("click", () => setMode("read"));
+  detailEl.appendChild(read);
   if (note.tags.length) {
     const tags = el("div", "tags", "");
     for (const t of note.tags) tags.appendChild(el("span", "tag", "#" + t));
@@ -424,6 +448,7 @@ function setData(d: GraphData, label: string) {
   rows.clear();
   sourceEl.textContent = label;
   if (keep && !notesByPath.has(keep)) select(null, false);
+  else if (mode === "read") openReader(keep, true);
   else if (keep && mode !== "emblem" && cardMode === "note") showDetail(keep);
   if (cardMode === "proposals") showProposals();
   scrollTarget = clamp(scrollTarget);
@@ -619,6 +644,200 @@ function placeTip() {
   const right = p.x < view.w - 260;
   tipEl.style.transform = `translate(${Math.round(right ? p.x + 18 : p.x - 18 - tipEl.offsetWidth)}px, ${Math.round(p.y + 14)}px)`;
 }
+
+// ---- reader: the whole note, cleanly ----------------------------------------------
+
+const readerEl = $<HTMLElement>("reader");
+const readerDoc = $<HTMLElement>("reader-doc");
+const readerScroll = $<HTMLElement>("reader-scroll");
+const readerCrumb = $<HTMLElement>("reader-crumb");
+const readerProgress = $<HTMLElement>("reader-progress");
+const readerSizeBtn = $<HTMLButtonElement>("reader-size");
+const READER_SIZES = ["small", "medium", "large"];
+let readerSize = Math.max(0, READER_SIZES.indexOf(store.get("mnemo.readerSize") || "medium"));
+let lastStage: StageMode = "emblem";
+let readerPath: string | null = null;
+let readerReq = 0;
+let pendingHeading = "";
+const textCache = new Map<string, { version: number; text: string }>();
+
+function applyReaderSize() {
+  readerEl.setAttribute("data-size", READER_SIZES[readerSize]);
+  readerSizeBtn.setAttribute("aria-label", `Text size: ${READER_SIZES[readerSize]}. Change text size.`);
+}
+
+function leaveReader() {
+  setMode(lastStage);
+  if (lastStage !== "emblem") canvas.focus();
+}
+
+/** The note's full text: carried in the data (demo), fetched from the bridge (live), or unavailable (snapshot). */
+async function noteText(path: string): Promise<string | null> {
+  const n = notesByPath.get(path);
+  if (n && typeof n.content === "string") return n.content;
+  if (!isLive || !token) return null;
+  const hit = textCache.get(path);
+  if (hit && hit.version === liveVersion) return hit.text;
+  const r = await api(`/api/note?path=${encodeURIComponent(path)}`);
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.error || r.statusText);
+  if (textCache.size > 40) textCache.clear();
+  textCache.set(path, { version: liveVersion, text: d.content });
+  return d.content;
+}
+
+/** Show `path` in the reader. `keep` re-renders in place (a live update) without losing the reading position. */
+function openReader(path: string | null, keep = false) {
+  const id = ++readerReq;
+  readerPath = path;
+  const note = path ? notesByPath.get(path) : undefined;
+  if (!path || !note) return readerEmpty();
+  readerCrumb.textContent = note.path;
+  if (!keep) {
+    readerDoc.innerHTML = "";
+    readerDoc.appendChild(readerHeader(note, null));
+    readerDoc.appendChild(el("p", "reader-note", "Opening…"));
+    readerScroll.scrollTop = 0;
+    liveEl.textContent = `Reading ${note.title}`;
+  }
+  noteText(path).then(
+    (text) => {
+      if (id !== readerReq) return;
+      const top = readerScroll.scrollTop;
+      renderReader(note, text, "");
+      readerScroll.scrollTop = keep ? top : 0;
+      if (pendingHeading) jumpTo(pendingHeading);
+      pendingHeading = "";
+      updateProgress();
+    },
+    (e) => {
+      if (id !== readerReq) return;
+      renderReader(note, null, e instanceof Error ? e.message : String(e));
+    },
+  );
+}
+
+function renderReader(note: NoteNode, text: string | null, error: string) {
+  readerDoc.innerHTML = "";
+  const body = text === null ? null : stripFrontmatter(text).body;
+  readerDoc.appendChild(readerHeader(note, body));
+  for (const p of data.proposals.filter((p) => p.path === note.path)) readerDoc.appendChild(proposalBox(p));
+  const md = el("div", "md", "");
+  if (body !== null) {
+    let blocks = parseBlocks(body);
+    const first = blocks[0];
+    // the title is already the page heading; don't print it twice
+    if (first && first.t === "h" && first.level === 1 && plainText(first.c).trim().toLowerCase() === note.title.trim().toLowerCase()) blocks = blocks.slice(1);
+    if (blocks.length) renderBlocks(blocks, readerLinks(note.path), md);
+    else md.appendChild(el("p", "reader-note", "This note has no text yet."));
+  } else {
+    if (note.excerpt) md.appendChild(el("p", "", note.excerpt));
+    md.appendChild(el("p", "reader-note", error
+      ? `Couldn't open the whole note: ${error}`
+      : "This is a snapshot, which only carries each note's opening lines. Open Mnemo (Mnemo.app or mnemo-ctl ui) to read whole notes."));
+  }
+  readerDoc.appendChild(md);
+  readerDoc.appendChild(readerFooter(note.path));
+}
+
+function readerHeader(note: NoteNode, body: string | null) {
+  const head = el("header", "reader-head", "");
+  const words = body === null ? 0 : wordCount(body);
+  const bits = [dateOf(timeOf(note))];
+  if (words) bits.push(`${Math.max(1, Math.round(words / 230))} min read`, `${words.toLocaleString()} words`);
+  head.appendChild(el("p", "eyebrow", bits.join(" · ")));
+  head.appendChild(el("h1", "reader-title", note.title));
+  if (note.tags.length) {
+    const tags = el("div", "tags", "");
+    for (const t of note.tags) tags.appendChild(el("span", "tag", "#" + t));
+    head.appendChild(tags);
+  }
+  return head;
+}
+
+function readerFooter(path: string) {
+  const foot = el("footer", "reader-foot", "");
+  const out = [...new Set(data.links.filter((l) => l.src === path && titles.has(l.dst)).map((l) => l.dst))];
+  const inn = [...new Set(data.links.filter((l) => l.dst === path && titles.has(l.src)).map((l) => l.src))];
+  const cols = el("div", "link-cols", "");
+  cols.appendChild(linkGroup("Linked from", inn));
+  cols.appendChild(linkGroup("Links to", out));
+  foot.appendChild(cols);
+  const show = el("div", "reader-show", "");
+  for (const m of ["helix", "graph"] as StageMode[]) {
+    const b = el("button", "chip", `Show in the ${m}`) as HTMLButtonElement;
+    b.type = "button";
+    b.addEventListener("click", () => setMode(m));
+    show.appendChild(b);
+  }
+  foot.appendChild(show);
+  return foot;
+}
+
+function readerLinks(src: string): ReaderLinks {
+  return {
+    src,
+    resolve: (t) => resolveLink(t),
+    titleOf: (p) => titles.get(p) || p,
+    open: (p, heading) => {
+      if (p === readerPath) return jumpTo(heading);
+      pendingHeading = heading;
+      select(p);
+    },
+    jump: (heading) => jumpTo(heading),
+  };
+}
+
+function jumpTo(heading: string) {
+  if (!heading) return;
+  const want = slug(heading);
+  const hs = readerDoc.querySelectorAll<HTMLElement>("[data-slug]");
+  for (const h of hs) {
+    if (h.dataset.slug === want) {
+      readerScroll.scrollTop += h.getBoundingClientRect().top - readerScroll.getBoundingClientRect().top - 16;
+      return;
+    }
+  }
+}
+
+/** Nothing selected: offer the newest notes. */
+function readerEmpty() {
+  readerDoc.innerHTML = "";
+  readerCrumb.textContent = "";
+  readerProgress.style.transform = "scaleX(0)";
+  const head = el("header", "reader-head", "");
+  head.appendChild(el("p", "eyebrow", notesLabel(data.nodes.length)));
+  head.appendChild(el("h1", "reader-title", "Read"));
+  head.appendChild(el("p", "reader-lede", data.nodes.length ? "Choose a note from the strand to read it here, or start with one of the newest." : "There are no notes in this vault yet."));
+  readerDoc.appendChild(head);
+  const ul = el("ul", "reader-recent", "");
+  for (const n of layout.nodes.slice(0, 8)) {
+    const li = document.createElement("li");
+    const b = el("button", "", "") as HTMLButtonElement;
+    b.type = "button";
+    b.appendChild(el("span", "recent-title", n.note.title));
+    b.appendChild(el("span", "recent-date", dateOf(timeOf(n.note))));
+    b.addEventListener("click", () => select(n.note.path));
+    li.appendChild(b);
+    ul.appendChild(li);
+  }
+  readerDoc.appendChild(ul);
+}
+
+function updateProgress() {
+  const max = readerScroll.scrollHeight - readerScroll.clientHeight;
+  readerProgress.style.transform = `scaleX(${max > 0 ? Math.min(1, readerScroll.scrollTop / max) : readerPath ? 1 : 0})`;
+}
+
+readerScroll.addEventListener("scroll", updateProgress, { passive: true } as AddEventListenerOptions);
+$("reader-back").addEventListener("click", leaveReader);
+readerSizeBtn.addEventListener("click", () => {
+  readerSize = (readerSize + 1) % READER_SIZES.length;
+  store.set("mnemo.readerSize", READER_SIZES[readerSize]);
+  applyReaderSize();
+  updateProgress();
+});
+applyReaderSize();
 
 // ---- strand list (the accessible twin) ----------------------------------------
 
@@ -854,6 +1073,7 @@ canvas.addEventListener("keydown", (e) => {
     else setMode("emblem");
     return;
   }
+  if (e.key === "Enter" && selected) { e.preventDefault(); setMode("read"); return; }
   const i = selected && layout.byPath.get(selected) ? layout.byPath.get(selected)!.index : -1;
   let next = -2;
   if (e.key === "ArrowDown" || e.key === "ArrowRight") next = Math.min(layout.nodes.length - 1, i + 1); // older
@@ -863,7 +1083,23 @@ canvas.addEventListener("keydown", (e) => {
   if (next !== -2 && layout.nodes[next]) { e.preventDefault(); select(layout.nodes[next].note.path); }
 });
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && document.activeElement !== canvas && selected) select(null);
+  if (e.key !== "Escape") return;
+  if (mode === "read") {
+    e.preventDefault();
+    leaveReader();
+  } else if (document.activeElement !== canvas && selected) select(null);
+});
+canvas.addEventListener("dblclick", (e) => {
+  if (mode !== "helix" && mode !== "graph") return;
+  const r = canvas.getBoundingClientRect();
+  const hit = pick(e.clientX - r.left, e.clientY - r.top);
+  if (hit) {
+    select(hit, false);
+    setMode("read");
+  }
+});
+listEl.addEventListener("dblclick", (e) => {
+  if ((e.target as HTMLElement).closest("button[data-index]") && mode !== "read") setMode("read");
 });
 
 for (const b of document.querySelectorAll<HTMLButtonElement>(".seg [data-mode]")) {
@@ -879,7 +1115,7 @@ window.addEventListener("resize", resize);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) { lastT = 0; hold(); request(); } });
 
 proposalsBtn.addEventListener("click", () => {
-  if (mode === "emblem") setMode("helix");
+  if (mode === "emblem" || mode === "read") setMode(lastStage === "graph" ? "graph" : "helix");
   showProposals();
 });
 

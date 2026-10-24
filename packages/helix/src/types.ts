@@ -7,6 +7,8 @@ export interface NoteNode {
   created?: number | null;
   /** First ~160 characters of the body, for the focus card. */
   excerpt?: string;
+  /** The whole note, when the data carries it (the demo vault). Live mode fetches it from the bridge instead. */
+  content?: string;
 }
 export interface Link {
   src: string;
