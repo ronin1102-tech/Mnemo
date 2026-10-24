@@ -49,8 +49,19 @@ class Allowlist(unittest.TestCase):
         self.assertIn('"refused": "write_note"', err)
         self.assertFalse(os.path.exists(log), "the server must not even be started for a refused tool")
 
-    def test_phase1_refuses_daily_note_and_unknown_tools(self):
-        for name in ["daily_note", "future_tool", "approve", ""]:
+    def test_phase1_allows_daily_note(self):
+        code, out, err = run(fake_config(1), "call-tool", "--name", "daily_note", "--arguments-file", write_json({}))
+        self.assertEqual(code, client.EXIT_OK, err)
+        self.assertEqual(json.loads(out)["tool"], "daily_note")
+
+    def test_allowlists_are_exactly_the_build_packet(self):
+        reads = {"search_notes", "read_note", "list_recent", "list_notes", "get_backlinks", "get_neighbors", "find_similar", "get_tags", "list_proposals", "daily_note"}
+        writes = {"write_note", "append_note", "patch_note", "move_note", "delete_note"}
+        self.assertEqual(set(client.PHASE_1), reads)
+        self.assertEqual(set(client.PHASE_2), reads | writes)
+
+    def test_phase1_refuses_unknown_tools(self):
+        for name in ["future_tool", "approve", "approve_proposal", ""]:
             code, _, _ = run(fake_config(1), "call-tool", "--name", name, "--arguments-file", write_json({}))
             self.assertEqual(code, client.EXIT_REFUSED, name)
 
@@ -154,7 +165,7 @@ class SshRoute(unittest.TestCase):
         self.assertIn("HTTPS_PROXY is not set", err)
 
     def test_only_tailnet_hosts_are_accepted(self):
-        for host in ["8.8.8.8", "192.168.1.5", "example.com", "100.128.0.1", "evil.ts.net.example.com"]:
+        for host in ["8.8.8.8", "192.168.1.5", "example.com", "100.128.0.1", "evil.ts.net.example.com", "OneMoreizzysMBP.lan"]:
             cfg = json.loads(json.dumps(self.CFG))
             cfg["ssh"]["host"] = host
             self.assertEqual(run(cfg, "list-tools")[0], client.EXIT_CONFIG, host)
@@ -293,6 +304,12 @@ class RealMnemoServer(unittest.TestCase):
         self.assertEqual(code, 0, err)
         hits = json.loads(json.loads(out)["result"]["content"][0]["text"])
         self.assertIn("this-is-the-beginning.md", [h["path"] for h in hits])
+
+    def test_daily_note_is_a_phase1_read(self):
+        code, out, err = run(self.cfg, "call-tool", "--name", "daily_note", "--arguments-file", write_json({"date": "2026-10-24"}))
+        self.assertEqual(code, 0, err)
+        data = json.loads(json.loads(out)["result"]["content"][0]["text"])
+        self.assertEqual(set(data), {"path", "exists", "content"})
 
     def test_missing_note_is_iserror_exit_1(self):
         code, out, _ = run(self.cfg, "call-tool", "--name", "read_note", "--arguments-file", write_json({"path": "no-such-note.md"}))

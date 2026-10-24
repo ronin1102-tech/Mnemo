@@ -1,14 +1,14 @@
-custom.mnemo test transcript — 2026-10-24T11:49:46Z — node v20.20.2, python Python 3.13.17
-Local launch of the same server command (Linux container, fixture vault: hello.md, this-is-the-beginning.md)
+custom.mnemo test transcript (build packet Oct 24: daily_note is Phase 1) — 2026-10-24T11:53:17Z — node v20.20.2, Python 3.13.17
+Local launch of the same server command (Linux container, fixture vault: hello.md, this-is-the-beginning.md). The SSH + Muse proxy route is NOT exercised here (no ssh in this container) — that is Vesper's live QA.
 
 $ client.py list-tools   (names + allowed only)
-protocol 2025-11-25 count 15
+protocol 2025-11-25 count 15 allowed 10
   search_notes allowed
   read_note allowed
   list_recent allowed
   list_notes allowed
   get_backlinks allowed
-  daily_note -
+  daily_note allowed
   get_neighbors allowed
   find_similar allowed
   get_tags allowed
@@ -43,7 +43,22 @@ $ client.py call-tool --name search_notes  {"query":"Beginning"}
     "content": [
       {
         "type": "text",
-        "text": "[\n  {\n    \"path\": \"this-is-the-beginning.md\",\n    \"title\": \"This is the beginning\",\n    \"mtime\": 1792842586639.5999,\n    \"tags\": [],\n    \"created\": null,\n    \"snippet\": \"# This is the [beginning]\\nThe first note in the vault.\\n\"\n  }\n]"
+        "text": "[\n  {\n    \"path\": \"this-is-the-beginning.md\",\n    \"title\": \"This is the beginning\",\n    \"mtime\": 1792842797731.4841,\n    \"tags\": [],\n    \"created\": null,\n    \"snippet\": \"# This is the [beginning]\\nThe first note in the vault.\\n\"\n  }\n]"
+      }
+    ]
+  }
+}
+exit 0
+
+$ client.py call-tool --name daily_note  {}   (Phase 1 read)
+{
+  "tool": "daily_note",
+  "isError": false,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\n  \"path\": \"daily/2026-10-24.md\",\n  \"exists\": false,\n  \"content\": null\n}"
       }
     ]
   }
@@ -51,12 +66,19 @@ $ client.py call-tool --name search_notes  {"query":"Beginning"}
 exit 0
 
 $ client.py call-tool --name write_note (phase 1)
-custom.mnemo: {"refused": "write_note", "phase": 1, "reason": "tool is not in the active allowlist", "allowed": ["find_similar", "get_backlinks", "get_neighbors", "get_tags", "list_notes", "list_proposals", "list_recent", "read_note", "search_notes"]}
+custom.mnemo: {"refused": "write_note", "phase": 1, "reason": "tool is not in the active allowlist", "allowed": ["daily_note", "find_similar", "get_backlinks", "get_neighbors", "get_tags", "list_notes", "list_proposals", "list_recent", "read_note", "search_notes"]}
 exit 4
 
+vault after the run (nothing written):
+.mnemo
+hello.md
+this-is-the-beginning.md
+
 $ python3 -m unittest discover -s tests -v  (with MNEMO_NODE/MNEMO_CLI set)
+test_allowlists_are_exactly_the_build_packet (test_client.Allowlist.test_allowlists_are_exactly_the_build_packet) ... ok
+test_phase1_allows_daily_note (test_client.Allowlist.test_phase1_allows_daily_note) ... ok
 test_phase1_refuses_a_write_tool_before_launching_anything (test_client.Allowlist.test_phase1_refuses_a_write_tool_before_launching_anything) ... ok
-test_phase1_refuses_daily_note_and_unknown_tools (test_client.Allowlist.test_phase1_refuses_daily_note_and_unknown_tools) ... ok
+test_phase1_refuses_unknown_tools (test_client.Allowlist.test_phase1_refuses_unknown_tools) ... ok
 test_phase2_allows_writes_but_still_refuses_unknown_tools (test_client.Allowlist.test_phase2_allows_writes_but_still_refuses_unknown_tools) ... ok
 test_phase_must_be_exactly_1_or_2 (test_client.Allowlist.test_phase_must_be_exactly_1_or_2) ... ok
 test_refusal_reports_the_status_but_never_the_credential (test_client.MuseProxyHelper.test_refusal_reports_the_status_but_never_the_credential) ... ok
@@ -68,6 +90,7 @@ test_bad_arguments_file (test_client.Protocol.test_bad_arguments_file) ... ok
 test_handshake_initialized_and_full_pagination (test_client.Protocol.test_handshake_initialized_and_full_pagination) ... ok
 test_iserror_exits_1_and_rpc_error_exits_2_and_neither_retries (test_client.Protocol.test_iserror_exits_1_and_rpc_error_exits_2_and_neither_retries) ... ok
 test_server_dying_is_a_clean_transport_failure (test_client.Protocol.test_server_dying_is_a_clean_transport_failure) ... ok
+test_daily_note_is_a_phase1_read (test_client.RealMnemoServer.test_daily_note_is_a_phase1_read) ... ok
 test_list_tools_returns_the_full_tool_list (test_client.RealMnemoServer.test_list_tools_returns_the_full_tool_list) ... ok
 test_missing_note_is_iserror_exit_1 (test_client.RealMnemoServer.test_missing_note_is_iserror_exit_1) ... ok
 test_phase2_tool_refused_under_phase1 (test_client.RealMnemoServer.test_phase2_tool_refused_under_phase1) ... ok
@@ -81,6 +104,6 @@ test_shipped_config_is_phase_1_and_valid (test_client.SshRoute.test_shipped_conf
 test_ssh_argv_is_batch_mode_via_the_proxy_helper_and_carries_no_credential (test_client.SshRoute.test_ssh_argv_is_batch_mode_via_the_proxy_helper_and_carries_no_credential) ... ok
 
 ----------------------------------------------------------------------
-Ran 24 tests in 4.051s
+Ran 27 tests in 4.572s
 
 OK

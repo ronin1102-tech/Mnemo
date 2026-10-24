@@ -29,7 +29,7 @@ Only the Python 3 standard library and the system `ssh` are needed.
    only at runtime.
 4. Run a smoke test:
    `python3 bin/client.py list-tools`
-   You should see 15 tools. The 9 Phase-1 tools show `"allowed": true`.
+   You should see 15 tools. The 10 Phase-1 tools show `"allowed": true`.
 
 `config.json` already matches the verified environment, so nothing in it needs editing for
 Phase 1. To use a different config file, pass `--config <path>` or set the `CUSTOM_MNEMO_CONFIG` env var.
@@ -80,8 +80,8 @@ list are refused, and that includes any tool the server adds in the future.
 
 | Phase | Tools |
 |---|---|
-| **1 (default, shipped)** | `search_notes`, `read_note`, `list_recent`, `list_notes`, `get_backlinks`, `get_neighbors`, `find_similar`, `get_tags`, `list_proposals` |
-| **2** | All of Phase 1, plus `write_note`, `append_note`, `patch_note`, `move_note`, `delete_note`, `daily_note` |
+| **1 (default, shipped)** | `search_notes`, `read_note`, `list_recent`, `list_notes`, `get_backlinks`, `get_neighbors`, `find_similar`, `get_tags`, `list_proposals`, `daily_note` |
+| **2** | All of Phase 1, plus `write_note`, `append_note`, `patch_note`, `move_note`, `delete_note` |
 
 **How to switch to Phase 2:** do this only after Phase-1 QA, and only on Tracy's explicit word.
 Change `"phase": 1` to `"phase": 2` in `config.json`. The value must be exactly the number 1 or 2;
@@ -92,10 +92,9 @@ server. A human approves or rejects it in Helix or `mnemo-ctl`. This connector h
 reject tool and no bypass, and none may be added. You can track proposals with
 `list_proposals`.
 
-> **Flag:** the spec places `daily_note` in Phase 2. In this Mnemo build, `daily_note` is
-> read-only on the server: it returns the path and content of today's daily note. The client
-> follows the spec, so `daily_note` is refused in Phase 1. If you want it in Phase 1, Tracy can
-> approve moving it.
+`daily_note` is a Phase-1 read. It is a pure lookup that returns `{path, exists, content}` and
+creates nothing; to create a daily note in Phase 2, use `write_note`, which makes a proposal.
+This was verified live on the Catalina pass, Oct 24.
 
 ## Failure recovery
 
@@ -122,7 +121,8 @@ again yourself.
   as an argument; the SSH `ProxyCommand` line contains only the script path, the port, `%h` and `%p`.
   Proxy errors report only the HTTP status line.
 - **No public route.** `ssh.host` must be a Tailscale address (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`
-  or `*.ts.net`). Otherwise the client exits 5 without connecting. The client uses no HTTP
+  or `*.ts.net`). Otherwise the client exits 5 without connecting. The Mac's LAN name
+  (`OneMoreizzysMBP.lan`) is deliberately not accepted; use the tailnet IP `100.103.16.78`. The client uses no HTTP
   transport, Funnel, Serve or public URL.
 - **SSH options:** `BatchMode=yes` (no password prompts), `IdentitiesOnly=yes`, `ConnectTimeout`,
   keepalives, and `LogLevel=ERROR`.
