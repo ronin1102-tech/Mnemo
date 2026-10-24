@@ -176,9 +176,25 @@ describe("hub: MCP over HTTP for agents on other machines", () => {
   it("oversized MCP requests get a clean 413, and the hub keeps serving", async () => {
     const { b, keys } = await hub({ "a.md": "x" });
     const k = keys.add("pc", "agent");
-    const big = "x".repeat(65 * 1024 * 1024);
-    const r = await raw(b.port, "/mcp", { Authorization: `Bearer ${k}`, "Content-Type": "application/json", "Content-Length": String(big.length) }, "POST", big);
-    expect(r.status).toBe(413);
+    // Announce a 65 MiB body but send none of it: the hub must refuse from the header alone.
+    // (Streaming the real body raced: the hub answers 413 at once, and a client still writing hits
+    // EPIPE after the test ends, which node --test reports as a failure on some machines.)
+    const status = await new Promise<number>((resolve, reject) => {
+      const r = http.request({
+        host: "127.0.0.1",
+        port: b.port,
+        path: "/mcp",
+        method: "POST",
+        headers: { Host: `127.0.0.1:${b.port}`, Authorization: `Bearer ${k}`, "Content-Type": "application/json", "Content-Length": String(65 * 1024 * 1024) },
+      }, (res) => {
+        res.resume();
+        resolve(res.statusCode!);
+        r.destroy();
+      });
+      r.on("error", (e) => (r.destroyed ? undefined : reject(e)));
+      r.flushHeaders();
+    });
+    expect(status).toBe(413);
     const a = await agent(b.port, k);
     expect((await a.call("read_note", { path: "a.md" })).isError).toBe(false);
     await a.client.close();
