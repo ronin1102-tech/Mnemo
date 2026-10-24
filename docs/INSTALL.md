@@ -65,6 +65,17 @@ Your browser opens the Helix on your real notes, live: edits you make in any oth
 - `--read-only` shows everything but removes Approve and Reject. `--port 8000` if 7337 is taken. `--no-open` to just print the link.
 - If Safari doesn't open by itself, paste the printed link into it.
 
+## 5a. Open Mnemo without Terminal (macOS)
+Once, in Terminal:
+```
+node packages/mnemo-mcp/dist/ctl.js --vault "/path/to/your/notes" launcher
+```
+This creates **Mnemo.app** in your Applications folder (in your home folder). Double-click it, or drag it to the Dock: it starts Mnemo in the background if needed and opens Safari. If it can't start, a dialog says why.
+- Stop it: `node packages/mnemo-mcp/dist/ctl.js --vault "/path/to/your/notes" stop`
+- Change folder or settings: run `launcher` again. Remove the app: `launcher --remove`.
+- If you move the `Mnemo-main` folder or reinstall Node, run `launcher` again (the app remembers where both are).
+- Without the app, the same thing from Terminal: `... --vault "/path/to/your/notes" launch`
+
 ## 5b. Or a static snapshot (no server)
 ```
 node packages/mnemo-mcp/dist/ctl.js --vault "/path/to/vault-copy" reindex

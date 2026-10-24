@@ -5,6 +5,9 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { isAllowedBind, startBridge } from "./bridge.js";
 import { TokenStore } from "./tokens.js";
+import { appleScriptSource, clearRunState, launchAgentPlist, runPid, runningUrl, shq, writeRunState } from "./launcher.js";
+import os from "node:os";
+import { execFileSync } from "node:child_process";
 import { graphPayload } from "./graph.js";
 import { Index } from "./indexer.js";
 import { ProposalStore, type ProposalStatus } from "./proposals.js";
@@ -24,6 +27,11 @@ const USAGE = `mnemo-ctl [--vault <dir>] [--read-only] <command>      (human-onl
   hub [--bind <tailscale ip>] [--allow-host <magicdns name>] [--port 7337] [--no-open]
                            The shared vault for your tailnet: the Helix for people and MCP over
                            HTTP (/mcp) for agents. Listens only on 127.0.0.1 and Tailscale addresses.
+  launch [--hub ...]       Start Mnemo in the background (if it isn't running) and open it
+  stop                     Stop the background Mnemo for this vault
+  launcher [--hub ...] [--at-login] [--app <path>]   macOS: create Mnemo.app (double-click to
+                           open Mnemo; no Terminal). --at-login also starts it when you log in.
+                           launcher --remove takes both away.
   token add <name> --agent|--person [--read-only]   Issue a key for one machine or person
   token list | token revoke <name>
 
@@ -50,6 +58,10 @@ function main(argv: string[]) {
   const bind: string[] = [];
   const allowHosts: string[] = [];
   let kind: "agent" | "person" | undefined;
+  let hubMode = false;
+  let atLogin = false;
+  let remove = false;
+  let appPath: string | undefined;
   const args: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--vault") vaultDir = argv[++i];
@@ -62,6 +74,10 @@ function main(argv: string[]) {
     else if (argv[i] === "--allow-host") allowHosts.push(argv[++i]);
     else if (argv[i] === "--agent") kind = "agent";
     else if (argv[i] === "--person") kind = "person";
+    else if (argv[i] === "--hub") hubMode = true;
+    else if (argv[i] === "--at-login") atLogin = true;
+    else if (argv[i] === "--remove") remove = true;
+    else if (argv[i] === "--app") appPath = argv[++i];
     else args.push(argv[i]);
   }
   const [cmd, arg, arg2] = args;
@@ -130,14 +146,147 @@ function main(argv: string[]) {
             const keys = new TokenStore(vault).list();
             lines.push(`  Keys: ${keys.length ? keys.map((k) => `${k.name} (${k.kind}${k.readOnly ? ", read-only" : ""})`).join(", ") : "none yet"}`);
           } else lines.push("  Local only (127.0.0.1).");
-          lines.push("  Ctrl+C to stop.");
+          lines.push("  Ctrl+C to stop (or: mnemo-ctl stop).");
           process.stderr.write(lines.join("\n") + "\n");
+          // let `launch`, `stop` and Mnemo.app find this instance; tidy up on the way out
+          writeRunState(vault, b.url, process.pid);
+          const done = () => {
+            clearRunState(vault);
+            process.exit(0);
+          };
+          process.on("SIGINT", done);
+          process.on("SIGTERM", done);
+          process.on("exit", () => clearRunState(vault));
           if (!noOpen) openBrowser(b.url);
         })
         .catch((e) => {
           process.stderr.write(`mnemo-ctl: ${e && e.code === "EADDRINUSE" ? `port ${port} is in use; try --port <n>` : e && e.code === "EADDRNOTAVAIL" ? `this computer doesn't have that address (is Tailscale connected?): ${e.address}` : e instanceof Error ? e.message : e}\n`);
           process.exitCode = 1;
         });
+      return;
+    }
+    case "launch": {
+      // Start ui (or --hub) in the background if it isn't running, then open the page.
+      const mode = hubMode ? "hub" : "ui";
+      const ctlPath = fileURLToPath(import.meta.url);
+      const childArgs = [ctlPath, "--vault", vault.root, mode, "--no-open", "--port", String(port)];
+      for (const a of bind) childArgs.push("--bind", a);
+      for (const h of allowHosts) childArgs.push("--allow-host", h);
+      if (readOnly) childArgs.push("--read-only");
+      if (uiOverride) childArgs.push("--ui", path.resolve(uiOverride));
+      (async () => {
+        const existing = await runningUrl(vault);
+        if (existing) {
+          out("Mnemo is already running; opening it.");
+          if (!noOpen) openBrowser(existing);
+          return;
+        }
+        const logFile = path.join(vault.ensureState("logs"), "launcher.log");
+        const fd = fs.openSync(logFile, "a");
+        fs.writeSync(fd, `\n--- ${new Date().toISOString()} launch ${mode}\n`);
+        const child = spawn(process.execPath, childArgs, { detached: true, stdio: ["ignore", fd, fd] });
+        let exited: number | null = null;
+        child.on("exit", (c) => (exited = c ?? 1));
+        child.unref();
+        for (let waited = 0; waited < 20000; waited += 250) {
+          await new Promise((r) => setTimeout(r, 250));
+          const url = await runningUrl(vault, 500);
+          if (url) {
+            out(`Mnemo is running (${mode}). Stop it with: mnemo-ctl --vault ${shq(vault.root)} stop`);
+            if (!noOpen) openBrowser(url);
+            return;
+          }
+          if (exited !== null) break;
+        }
+        const tail = fs.readFileSync(logFile, "utf8").split("\n").filter(Boolean).slice(-3).join("\n");
+        throw new VaultError(`Mnemo didn't start.\n${tail.replace(/^mnemo-ctl: /gm, "")}\n(full log: ${logFile})`);
+      })().catch((e) => {
+        process.stderr.write(`mnemo-ctl: ${e instanceof Error ? e.message : e}\n`);
+        process.exitCode = 1;
+      });
+      return;
+    }
+    case "stop": {
+      (async () => {
+        const pid = runPid(vault);
+        if (!pid || !(await runningUrl(vault))) {
+          clearRunState(vault, pid ?? process.pid);
+          return out("Mnemo isn't running for this vault.");
+        }
+        try {
+          process.kill(pid, "SIGTERM");
+        } catch {
+          /* already gone */
+        }
+        for (let i = 0; i < 40 && (await runningUrl(vault, 300)); i++) await new Promise((r) => setTimeout(r, 125));
+        clearRunState(vault, pid);
+        out("Mnemo stopped.");
+      })().catch((e) => {
+        process.stderr.write(`mnemo-ctl: ${e instanceof Error ? e.message : e}\n`);
+        process.exitCode = 1;
+      });
+      return;
+    }
+    case "launcher": {
+      if (process.platform !== "darwin") throw new VaultError("The Mnemo app launcher is for macOS. Elsewhere, use: mnemo-ctl --vault <dir> launch");
+      const app = path.resolve(appPath || path.join(os.homedir(), "Applications", "Mnemo.app"));
+      const label = "com.mnemo.hub";
+      const plist = path.join(os.homedir(), "Library", "LaunchAgents", `${label}.plist`);
+      if (remove) {
+        try {
+          execFileSync("launchctl", ["unload", "-w", plist], { stdio: "ignore" });
+        } catch {
+          /* wasn't loaded */
+        }
+        fs.rmSync(plist, { force: true });
+        fs.rmSync(app, { recursive: true, force: true });
+        return out(`Removed ${app}${fs.existsSync(plist) ? "" : " and the start-at-login entry"}.`);
+      }
+      const ctlPath = fileURLToPath(import.meta.url);
+      const flags: string[] = [];
+      if (hubMode) flags.push("--hub");
+      if (port !== 7337) flags.push("--port", String(port));
+      for (const a of bind) flags.push("--bind", a);
+      for (const h of allowHosts) flags.push("--allow-host", h);
+      if (readOnly) flags.push("--read-only");
+      for (const a of bind) if (!isAllowedBind(a)) throw new VaultError(`Refusing ${a}: only 127.0.0.1 and Tailscale addresses are allowed`);
+      // absolute paths throughout: apps opened from Finder don't see Terminal's PATH
+      const shell = [process.execPath, ctlPath, "--vault", vault.root, "launch", ...flags].map(shq).join(" ");
+      fs.mkdirSync(path.dirname(app), { recursive: true });
+      const src = path.join(os.tmpdir(), `mnemo-launcher-${process.pid}.applescript`);
+      fs.writeFileSync(src, appleScriptSource(shell));
+      try {
+        fs.rmSync(app, { recursive: true, force: true });
+        execFileSync("osacompile", ["-o", app, src]);
+      } finally {
+        fs.rmSync(src, { force: true });
+      }
+      // the logo: the emblem, as the app's icon
+      const icns = path.resolve(path.dirname(ctlPath), "..", "..", "helix", "dist", "mnemo.icns");
+      if (fs.existsSync(icns)) {
+        fs.copyFileSync(icns, path.join(app, "Contents", "Resources", "applet.icns"));
+        try {
+          execFileSync("touch", [app]); // nudge Finder and the Dock to pick up the new icon
+        } catch {
+          /* cosmetic */
+        }
+      }
+      out(`Created ${app}: double-click it to open Mnemo (${hubMode ? "office hub" : "this Mac only"}). Drag it to your Dock if you like.`);
+      if (atLogin) {
+        const mode = hubMode ? "hub" : "ui";
+        const args = [process.execPath, ctlPath, "--vault", vault.root, mode, "--no-open", ...flags.filter((f) => f !== "--hub")];
+        const log = path.join(vault.ensureState("logs"), "login.log");
+        fs.mkdirSync(path.dirname(plist), { recursive: true });
+        try {
+          execFileSync("launchctl", ["unload", "-w", plist], { stdio: "ignore" });
+        } catch {
+          /* first install */
+        }
+        fs.writeFileSync(plist, launchAgentPlist(label, args, log));
+        execFileSync("launchctl", ["load", "-w", plist]);
+        out(`Mnemo will also start by itself at login (${plist}). Log: ${log}`);
+      }
+      out(`To remove: mnemo-ctl --vault ${shq(vault.root)} launcher --remove`);
       return;
     }
     case "token": {

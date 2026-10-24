@@ -13,6 +13,7 @@ function uiDir() {
   fs.writeFileSync(path.join(d, "index.html"), "<!doctype html><title>t</title>");
   fs.writeFileSync(path.join(d, "app.js"), "/* app */");
   fs.writeFileSync(path.join(d, "style.css"), "/* css */");
+  fs.writeFileSync(path.join(d, "icon-32.png"), "png");
   return d;
 }
 
@@ -74,6 +75,9 @@ describe("bridge: only this machine, only this page", () => {
     expect(String(page.headers["content-security-policy"])).toContain("default-src 'self'");
     expect(page.headers["x-frame-options"]).toBe("DENY");
     for (const p of ["/../package.json", "/%2e%2e/package.json", "/a.md", "/.mnemo/index.db", "/etc/passwd"]) expect((await req(b.port, p)).status).toBe(404);
+    const icon = await req(b.port, "/icon-32.png");
+    expect(icon.status).toBe(200);
+    expect(icon.headers["content-type"]).toBe("image/png");
     await b.close();
   });
 });

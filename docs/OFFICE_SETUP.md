@@ -42,6 +42,15 @@ It prints the addresses to use and opens the Helix on this Mac. Leave the Termin
 
 **If `--bind` fails** ("this computer doesn't have that address"): Tailscale isn't connected, or its address changed; check the Tailscale app. Alternative that avoids binding at all: run the hub without `--bind`, and let Tailscale forward to it with `tailscale serve` (see Tailscale's docs for your version), keeping `--allow-host onemoreizzysmbp.tail81e3a6.ts.net`.
 
+### Make it a double-click app, and start it at login (recommended for the office)
+```
+node packages/mnemo-mcp/dist/ctl.js --vault ~/Vault launcher --hub --bind 100.103.16.78 --allow-host onemoreizzysmbp.tail81e3a6.ts.net --at-login
+```
+- **Mnemo.app** (in your home folder's Applications): double-click to open the Helix; it starts the hub in the background if it isn't running. No Terminal window to keep open.
+- **--at-login**: the hub also starts whenever you log in, and macOS restarts it if it stops unexpectedly (for example if it started before Tailscale connected; it retries every 15 s). Log: `.mnemo/logs/login.log` in the vault.
+- Stop it: `... --vault ~/Vault stop`. Remove the app and the login entry: `... launcher --remove`.
+- The Mac still needs to be awake and logged in for office machines to reach it.
+
 ## On an office machine: an agent
 Point any MCP client that supports HTTP ("Streamable HTTP") transport at:
 ```

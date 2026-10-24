@@ -61,13 +61,14 @@ function buildModel(d: GraphData) {
   // roughly the top 8% most-linked notes are hubs (always labelled in graph mode)
   const ds = [...degree.values()].sort((a, b) => b - a);
   hubDegree = Math.max(2, ds[Math.floor(ds.length * 0.08)] || 2);
-  $("count").textContent = `${d.nodes.length.toLocaleString()} notes`;
+  $("count").textContent = `${notesLabel(d.nodes.length)}`;
   const n = d.proposals.length;
   proposalsBtn.hidden = n === 0;
   proposalsBtn.textContent = `◆ ${n} proposal${n === 1 ? "" : "s"}`;
   proposalsBtn.setAttribute("aria-label", `${n} pending agent proposal${n === 1 ? "" : "s"}: review`);
 }
 const dateOf = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+const notesLabel = (n: number) => `${n.toLocaleString()} note${n === 1 ? "" : "s"}`;
 
 // ---- effects quality --------------------------------------------------------
 
@@ -443,7 +444,7 @@ async function loadLive() {
     liveVersion = d.version || 0;
     liveDown = false;
     const viewer = (d as GraphData & { viewer?: string }).viewer;
-    setData(d, `Live vault · ${d.nodes.length.toLocaleString()} notes${viewer && viewer !== "this computer" ? ` · signed in as ${viewer}` : ""}${d.readOnly ? " · read-only" : ""}`);
+    setData(d, `Live vault · ${notesLabel(d.nodes.length)}${viewer && viewer !== "this computer" ? ` · signed in as ${viewer}` : ""}${d.readOnly ? " · read-only" : ""}`);
   } catch (_) {
     liveDown = true;
     sourceEl.textContent = "Disconnected from the Mnemo hub (is it still running, and is Tailscale connected?)";
@@ -893,7 +894,7 @@ if (isLive) {
   const d = injected || demoData();
   buildModel(d);
   sourceEl.textContent = injected
-    ? `Vault snapshot · ${d.nodes.length.toLocaleString()} notes · ${injected.generatedAt.slice(0, 16).replace("T", " ")}`
+    ? `Vault snapshot · ${notesLabel(d.nodes.length)} · ${injected.generatedAt.slice(0, 16).replace("T", " ")}`
     : "Demo vault · run mnemo-ctl ui to open yours";
 }
 updateFxButton();

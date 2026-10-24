@@ -21,7 +21,7 @@ button:focus, canvas:focus { outline: 2px solid rgba(230, 238, 252, 0.85); outli
 .bar::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 1px;
   background: linear-gradient(90deg, transparent, rgba(143, 188, 255, 0.45), transparent); }
 .brand { display: flex; align-items: center; margin-right: 26px; }
-.brandmark { width: 18px; height: 26px; margin-right: 10px; filter: drop-shadow(0 0 6px rgba(143, 188, 255, 0.55)); }
+.brandmark { width: 28px; height: 28px; margin-right: 10px; border-radius: 50%; box-shadow: 0 0 10px rgba(94, 143, 220, 0.45); }
 .wordmark { font: 600 17px/1 var(--serif); letter-spacing: 0.34em;
   background: linear-gradient(180deg, #ffffff, #a9c4f0); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .seg { position: relative; display: flex; overflow: hidden; padding: 3px; border-radius: 10px; background: rgba(3, 8, 26, 0.6); border: 1px solid var(--line); }
