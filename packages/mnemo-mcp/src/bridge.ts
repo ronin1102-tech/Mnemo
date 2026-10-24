@@ -232,6 +232,12 @@ export async function startBridge(vault: Vault, opts: BridgeOptions) {
         refresh();
         return send(200, { ...graphPayload(vault, index, store), live: true, readOnly, version, viewer: person ? person.name : "this computer" });
       }
+      // the full text of one note, for the Helix reader (the same jail as every agent path: .md only, never .mnemo/)
+      if (req.method === "GET" && url.pathname === "/api/note") {
+        const rel = vault.normalize(url.searchParams.get("path") || "");
+        if (rel.split("/").some((seg) => seg.startsWith("."))) throw new VaultError(`Note not found: ${rel}`);
+        return send(200, { path: rel, content: vault.read(rel) });
+      }
       const m = url.pathname.match(/^\/api\/proposals\/([a-z0-9-]+)(?:\/(approve|reject))?$/);
       if (m && req.method === "GET" && !m[2]) {
         const p = store.get(m[1]);

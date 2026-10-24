@@ -95,6 +95,18 @@ describe("bridge: live data and the write gate", () => {
     expect(byPath).toEqual({ "new.md": false, "a.md": true });
     await b.close();
   });
+  it("serves one note's full text to the reader, through the vault jail", async () => {
+    const { b, api } = await bridge({ "a.md": "# A\nfull body", "sub/b.md": "# B", ".hidden/c.md": "# C", "notes.txt": "x" });
+    const r = await api("/api/note?path=" + encodeURIComponent("a.md"));
+    expect(r.status).toBe(200);
+    expect(JSON.parse(r.body)).toEqual({ path: "a.md", content: "# A\nfull body" });
+    expect(JSON.parse((await api("/api/note?path=sub%2Fb.md")).body).content).toBe("# B");
+    for (const bad of ["../x.md", "/etc/passwd", ".mnemo/tokens.json", ".mnemo/x.md", ".hidden/c.md", "notes.txt", "missing.md", ""]) {
+      expect((await api("/api/note?path=" + encodeURIComponent(bad))).status, bad).toBe(400);
+    }
+    expect((await req(b.port, "/api/note?path=a.md")).status).toBe(401);
+    await b.close();
+  });
   it("approve in the UI lands byte-for-byte what was proposed, via the same writer", async () => {
     const { root, b, store, api } = await bridge({ "a.md": "line one\n" });
     const p = store.proposeAppend("a.md", "added by agent", "agent-x");
