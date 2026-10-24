@@ -14,6 +14,8 @@ const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as 
 const canvas = $<HTMLCanvasElement>("stage");
 const ctx = canvas.getContext("2d") as CanvasRenderingContext2D;
 const listEl = $<HTMLUListElement>("strand-list");
+const listScroll = $<HTMLElement>("strand-scroll");
+const stageWrap = document.querySelector(".stage-wrap") as HTMLElement;
 const detailEl = $<HTMLElement>("detail");
 const liveEl = $<HTMLElement>("live");
 const sourceEl = $<HTMLElement>("source");
@@ -115,6 +117,8 @@ function resize() {
   cxTarget = centreTarget();
   view.cx = cxTarget;
   placeSegIndicator();
+  stageWrap.classList.toggle("sheet", sheetMode());
+  renderList();
   hold();
   request();
 }
@@ -178,8 +182,12 @@ function frame(ts: number) {
 }
 
 /** Keep the coil clear of the focus card: centre it in the space to the card's right when there is room. */
+/** Below this stage width the focus card becomes a bottom sheet instead of floating beside the coil. */
+const SHEET_W = 900;
+const sheetMode = () => view.w <= SHEET_W;
+
 function centreTarget() {
-  const card = !detailEl.hidden && mode !== "emblem" && view.w > 900;
+  const card = !detailEl.hidden && mode !== "emblem" && !sheetMode();
   return card ? view.w / 2 + Math.min(200, (view.w - 760) / 2) : view.w / 2;
 }
 
@@ -259,30 +267,23 @@ function select(path: string | null, reveal = true) {
   selected = path;
   selectedAt = clock;
   touch();
-  for (const li of listEl.querySelectorAll<HTMLElement>("button[data-path]")) {
-    if (li.dataset.path === path) {
-      li.setAttribute("aria-current", "true");
-      if (reveal) scrollListTo(li);
-    } else li.removeAttribute("aria-current");
-  }
+  const idx = path && layout.byPath.get(path) ? layout.byPath.get(path)!.index : -1;
+  if (idx >= 0 && reveal) revealRow(idx);
+  renderList();
   if (path && reveal) {
+    // with the card as a bottom sheet, sit the note in the upper part of the view, clear of it
+    const at = path && mode !== "emblem" && sheetMode() ? 0.28 : 0.5;
     if (mode === "graph") {
       const p = graphPoints().get(path);
-      if (p) gvTarget = { ...gvTarget, x: p.x, y: p.y };
+      if (p) gvTarget = { ...gvTarget, x: p.x, y: p.y + ((0.5 - at) * view.h) / gvTarget.zoom };
     } else {
       const n = layout.byPath.get(path);
-      if (n) scrollTarget = clamp(n.y - view.h / 2);
+      if (n) scrollTarget = clamp(n.y - view.h * at);
     }
   }
   if (path && mode !== "emblem") showDetail(path);
   else hideDetail();
   request();
-}
-
-function scrollListTo(li: HTMLElement) {
-  const box = listEl.getBoundingClientRect();
-  const r = li.getBoundingClientRect();
-  if (r.top < box.top || r.bottom > box.bottom) listEl.scrollTop += r.top - box.top - box.height / 2 + r.height / 2;
 }
 
 // ---- focus card ---------------------------------------------------------------
@@ -407,33 +408,126 @@ function placeTip() {
 
 // ---- strand list (the accessible twin) ----------------------------------------
 
-function buildList() {
-  const frag = document.createDocumentFragment();
-  for (const n of layout.nodes) {
-    const li = document.createElement("li");
-    const b = document.createElement("button");
-    b.type = "button";
-    b.dataset.path = n.note.path;
-    b.className = "row s" + n.strand;
-    const deg = (adj.get(n.note.path) || EMPTY).size;
-    const prop = proposed.has(n.note.path);
-    b.setAttribute("aria-label", `${n.note.title}, ${dateOf(timeOf(n.note))}, ${deg} links${prop ? ", has a pending agent proposal" : ""}`);
-    b.appendChild(el("span", "rail", ""));
-    const body = el("span", "row-body", "");
-    body.appendChild(el("span", "row-title", n.note.title));
-    body.appendChild(el("span", "row-date", dateOf(timeOf(n.note))));
-    b.appendChild(body);
-    if (prop) b.appendChild(el("span", "proposal badge", "proposal"));
-    b.appendChild(el("span", "pill", String(deg)));
-    b.addEventListener("click", () => {
-      if (mode === "emblem") setMode("helix");
-      select(n.note.path);
-    });
-    li.appendChild(b);
-    frag.appendChild(li);
-  }
-  listEl.appendChild(frag);
+/**
+ * The strand list is windowed: only rows near the viewport (plus the selected and focused rows)
+ * exist in the DOM. At 10k notes the full list was 70,000 elements; on a 6x-throttled CPU that
+ * meant an 8 s page load and 10 fps list scrolling. Each row carries aria-setsize/aria-posinset,
+ * and arrow keys walk all notes. Small vaults (up to FULL_LIST_MAX) still render every row, so
+ * the list stays complete for screen readers in browse mode.
+ */
+const ROW_H = 48;
+const FULL_LIST_MAX = 1500;
+const rows = new Map<number, HTMLLIElement>();
+let listFocus = -1;
+let listRaf = 0;
+
+function makeRow(i: number): HTMLLIElement {
+  const n = layout.nodes[i];
+  const li = document.createElement("li");
+  li.style.transform = `translateY(${i * ROW_H}px)`;
+  li.setAttribute("aria-setsize", String(layout.nodes.length));
+  li.setAttribute("aria-posinset", String(i + 1));
+  const b = document.createElement("button");
+  b.type = "button";
+  b.dataset.path = n.note.path;
+  b.dataset.index = String(i);
+  b.className = "row s" + n.strand;
+  const deg = (adj.get(n.note.path) || EMPTY).size;
+  const prop = proposed.has(n.note.path);
+  b.setAttribute("aria-label", `${n.note.title}, ${dateOf(timeOf(n.note))}, ${deg} links${prop ? ", has a pending agent proposal" : ""}`);
+  b.appendChild(el("span", "rail", ""));
+  const body = el("span", "row-body", "");
+  body.appendChild(el("span", "row-title", n.note.title));
+  body.appendChild(el("span", "row-date", dateOf(timeOf(n.note))));
+  b.appendChild(body);
+  if (prop) b.appendChild(el("span", "proposal badge", "proposal"));
+  b.appendChild(el("span", "pill", String(deg)));
+  li.appendChild(b);
+  return li;
 }
+
+/** Bring the rendered rows in line with the list's scroll position. Existing rows are never moved, so focus survives. */
+function renderList() {
+  const total = layout.nodes.length;
+  listEl.style.height = total * ROW_H + "px";
+  let first = 0;
+  let last = total - 1;
+  if (total > FULL_LIST_MAX) {
+    first = Math.max(0, Math.floor(listScroll.scrollTop / ROW_H) - 15);
+    last = Math.min(total - 1, first + Math.ceil((listScroll.clientHeight || 600) / ROW_H) + 30);
+  }
+  const want = new Set<number>();
+  for (let i = first; i <= last; i++) want.add(i);
+  const sel = selected && layout.byPath.get(selected) ? layout.byPath.get(selected)!.index : -1;
+  if (sel >= 0) want.add(sel);
+  if (listFocus >= 0) want.add(listFocus);
+  for (const [i, li] of rows) if (!want.has(i)) { li.remove(); rows.delete(i); }
+  // insert new rows in index order, before the next existing row, without touching existing ones
+  const order = [...want].sort((a, b) => a - b);
+  let next: Node | null = null;
+  for (let k = order.length - 1; k >= 0; k--) {
+    const i = order[k];
+    let li = rows.get(i);
+    if (!li) {
+      li = makeRow(i);
+      rows.set(i, li);
+      listEl.insertBefore(li, next);
+    }
+    next = li;
+  }
+  for (const [i, li] of rows) {
+    const b = li.firstChild as HTMLElement;
+    if (i === sel) b.setAttribute("aria-current", "true");
+    else b.removeAttribute("aria-current");
+  }
+}
+
+/** Scroll the list so row i is visible (centred if it was off-screen). */
+function revealRow(i: number) {
+  const top = i * ROW_H;
+  const h = listScroll.clientHeight;
+  if (top < listScroll.scrollTop || top + ROW_H > listScroll.scrollTop + h) listScroll.scrollTop = top - h / 2 + ROW_H / 2;
+}
+
+function focusRow(i: number) {
+  const total = layout.nodes.length;
+  i = Math.max(0, Math.min(total - 1, i));
+  listFocus = i;
+  revealRow(i);
+  renderList();
+  (rows.get(i)!.firstChild as HTMLElement).focus();
+}
+
+listScroll.addEventListener("scroll", () => {
+  if (!listRaf) listRaf = requestAnimationFrame(() => { listRaf = 0; renderList(); });
+}, { passive: true } as AddEventListenerOptions);
+listEl.addEventListener("click", (e) => {
+  const b = (e.target as HTMLElement).closest("button[data-index]") as HTMLElement | null;
+  if (!b) return;
+  if (mode === "emblem") setMode("helix");
+  select(layout.nodes[Number(b.dataset.index)].note.path);
+});
+listEl.addEventListener("keydown", (e) => {
+  const b = (e.target as HTMLElement).closest("button[data-index]") as HTMLElement | null;
+  if (!b) return;
+  const i = Number(b.dataset.index);
+  const page = Math.max(1, Math.floor(listScroll.clientHeight / ROW_H) - 1);
+  const to: Record<string, number> = { ArrowDown: i + 1, ArrowUp: i - 1, PageDown: i + page, PageUp: i - page, Home: 0, End: layout.nodes.length - 1 };
+  if (e.key in to) {
+    e.preventDefault();
+    focusRow(to[e.key]);
+  }
+});
+listEl.addEventListener("focusin", (e) => {
+  const b = (e.target as HTMLElement).closest("button[data-index]") as HTMLElement | null;
+  if (b) listFocus = Number(b.dataset.index);
+});
+listEl.addEventListener("focusout", (e) => {
+  if (!e.relatedTarget || !listEl.contains(e.relatedTarget as Node)) {
+    listFocus = -1;
+    if (!listRaf) listRaf = requestAnimationFrame(() => { listRaf = 0; renderList(); });
+  }
+});
 
 // ---- pointer / keyboard -------------------------------------------------------
 
@@ -570,7 +664,6 @@ fxBtn.addEventListener("click", () => {
 window.addEventListener("resize", resize);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) { lastT = 0; hold(); request(); } });
 
-buildList();
 updateFxButton();
 resize();
 setMode("emblem");
