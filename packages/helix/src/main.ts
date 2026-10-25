@@ -875,8 +875,8 @@ applyReaderSize();
 // ---- the owner's pen: notes and requests, written in place ---------------------------
 
 /**
- * The owner writes directly (no proposal): saves go to the bridge, which writes them atomically and
- * only for the Helix on the vault's own computer. A save names the version it was edited from; if the
+ * The owner writes directly (no proposal): saves go to the bridge, which writes them atomically, for
+ * the Helix on the vault's own computer or a person key (the bridge decides; the UI follows canWrite). A save names the version it was edited from; if the
  * note changed meanwhile the bridge refuses, and the owner chooses what wins.
  */
 interface Draft {
