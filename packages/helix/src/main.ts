@@ -8,9 +8,10 @@ import { drawBackground, drawDust, drawGraph, drawHelix, graphToScreen, helixPos
 import type { GraphView } from "./render";
 import { describeProposal, diffLines, expiresLabel, tokenFromHash } from "./live";
 import { makeResolver, parseBlocks, plainText, slug, stripFrontmatter, wordCount } from "./markdown";
+import { isRequestPath, newNoteContent, newNotePath, REQUEST_STATUS_LABEL, REQUESTS_DIR } from "./owner";
 import { renderBlocks } from "./reader";
 import type { ReaderLinks } from "./reader";
-import type { GraphData, NoteNode, PendingProposal } from "./types";
+import type { GraphData, NoteNode, PendingProposal, RequestSummary } from "./types";
 
 type Mode = "emblem" | "helix" | "graph" | "read";
 type StageMode = Exclude<Mode, "read">;
@@ -242,6 +243,11 @@ function draw() {
 // ---- mode, selection ----------------------------------------------------
 
 function setMode(m: Mode) {
+  if (m !== "read" && !closeEditor()) {
+    // stayed in the editor: keep the Read tab lit
+    for (const b of document.querySelectorAll<HTMLButtonElement>(".seg [data-mode]")) b.setAttribute("aria-pressed", String(b.dataset.mode === mode));
+    return;
+  }
   mode = m;
   hold();
   for (const b of document.querySelectorAll<HTMLButtonElement>(".seg [data-mode]")) b.setAttribute("aria-pressed", String(b.dataset.mode === m));
@@ -253,7 +259,8 @@ function setMode(m: Mode) {
     hideDetail();
     tipEl.hidden = true;
     $("reader-back-label").textContent = lastStage.charAt(0).toUpperCase() + lastStage.slice(1);
-    openReader(selected);
+    if (!draft) openReader(selected);
+    updateReaderTools();
     readerScroll.focus();
     return;
   }
@@ -300,6 +307,7 @@ function canvasLabel() {
 }
 
 function select(path: string | null, reveal = true) {
+  if (mode === "read" && draft && !closeEditor()) return;
   selected = path;
   selectedAt = clock;
   touch();
@@ -436,8 +444,10 @@ let liveVersion = 0;
 let liveBusy = false;
 let liveDown = false;
 
-function api(pathname: string, method = "GET"): Promise<Response> {
-  return fetch(pathname, { method, headers: { "X-Mnemo-Token": token || "" }, credentials: "omit", cache: "no-store" });
+function api(pathname: string, method = "GET", body?: unknown): Promise<Response> {
+  const headers: Record<string, string> = { "X-Mnemo-Token": token || "" };
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+  return fetch(pathname, { method, headers, credentials: "omit", cache: "no-store", body: body === undefined ? undefined : JSON.stringify(body) });
 }
 
 /** Swap in a new model, keeping the user's place: selection, focus card, scroll. */
@@ -448,7 +458,8 @@ function setData(d: GraphData, label: string) {
   rows.clear();
   sourceEl.textContent = label;
   if (keep && !notesByPath.has(keep)) select(null, false);
-  else if (mode === "read") openReader(keep, true);
+  else if (mode === "read" && !draft) openReader(keep, true);
+  if (mode === "read") updateReaderTools();
   else if (keep && mode !== "emblem" && cardMode === "note") showDetail(keep);
   if (cardMode === "proposals") showProposals();
   scrollTarget = clamp(scrollTarget);
@@ -513,6 +524,7 @@ function proposalBox(p: PendingProposal): HTMLElement {
   box.appendChild(el("p", "proposal-what", describeProposal(p)));
   const meta = [p.createdAt ? `proposed ${p.createdAt.slice(0, 16).replace("T", " ")}` : "", expiresLabel(p.expiresAt, Date.now())].filter(Boolean).join(" · ");
   if (meta) box.appendChild(el("p", "proposal-meta", meta));
+  if (p.request) box.appendChild(el("p", "proposal-meta", `Answers your request: ${titles.get(p.request) || p.request}`));
   if (!isLive) {
     box.appendChild(el("p", "proposal-meta", `Review on the command line: mnemo-ctl show ${p.id}, then approve or reject. For approval in this view, open it with mnemo-ctl ui.`));
     return box;
@@ -667,6 +679,7 @@ function applyReaderSize() {
 }
 
 function leaveReader() {
+  if (!closeEditor()) return;
   setMode(lastStage);
   if (lastStage !== "emblem") canvas.focus();
 }
@@ -690,6 +703,7 @@ async function noteText(path: string): Promise<string | null> {
 function openReader(path: string | null, keep = false) {
   const id = ++readerReq;
   readerPath = path;
+  updateReaderTools();
   const note = path ? notesByPath.get(path) : undefined;
   if (!path || !note) return readerEmpty();
   readerCrumb.textContent = note.path;
@@ -721,7 +735,10 @@ function renderReader(note: NoteNode, text: string | null, error: string) {
   readerDoc.innerHTML = "";
   const body = text === null ? null : stripFrontmatter(text).body;
   readerDoc.appendChild(readerHeader(note, body));
-  for (const p of data.proposals.filter((p) => p.path === note.path)) readerDoc.appendChild(proposalBox(p));
+  const req = isRequestPath(note.path) ? (data.requests || []).find((r) => r.path === note.path) : undefined;
+  if (req) readerDoc.appendChild(requestBanner(req));
+  // proposals on this note, and (on a request) the answers waiting for approval, reviewable right here
+  for (const p of data.proposals.filter((p) => p.path === note.path || (req && p.request === note.path))) readerDoc.appendChild(proposalBox(p));
   const md = el("div", "md", "");
   if (body !== null) {
     let blocks = parseBlocks(body);
@@ -822,6 +839,22 @@ function readerEmpty() {
     ul.appendChild(li);
   }
   readerDoc.appendChild(ul);
+  const reqs = data.requests || [];
+  if (reqs.length) {
+    readerDoc.appendChild(el("h2", "reader-section", "Your requests"));
+    const rl = el("ul", "reader-recent", "");
+    for (const r of reqs) {
+      const li = document.createElement("li");
+      const b = el("button", "", "") as HTMLButtonElement;
+      b.type = "button";
+      b.appendChild(el("span", "recent-title", r.title));
+      b.appendChild(el("span", "req-status req-" + r.status, r.status.replace("-", " ")));
+      b.addEventListener("click", () => select(r.path));
+      li.appendChild(b);
+      rl.appendChild(li);
+    }
+    readerDoc.appendChild(rl);
+  }
 }
 
 function updateProgress() {
@@ -838,6 +871,272 @@ readerSizeBtn.addEventListener("click", () => {
   updateProgress();
 });
 applyReaderSize();
+
+// ---- the owner's pen: notes and requests, written in place ---------------------------
+
+/**
+ * The owner writes directly (no proposal): saves go to the bridge, which writes them atomically and
+ * only for the Helix on the vault's own computer. A save names the version it was edited from; if the
+ * note changed meanwhile the bridge refuses, and the owner chooses what wins.
+ */
+interface Draft {
+  kind: "edit" | "note" | "request";
+  /** Edit: the note's path. New: chosen at save time. */
+  path: string;
+  base: string | null;
+  original: string;
+}
+let draft: Draft | null = null;
+let edText: HTMLTextAreaElement | null = null;
+let edTitle: HTMLInputElement | null = null;
+let edFolder: HTMLInputElement | null = null;
+let edStatus: HTMLElement | null = null;
+let edSaving = false;
+const readerTools = $<HTMLElement>("reader-tools");
+const readerEditBtn = $<HTMLButtonElement>("reader-edit");
+
+const canWrite = () => isLive && !!data.canWrite && !data.readOnly;
+const isDirty = () => !!draft && !!edText && (edText.value !== draft.original || (!!edTitle && edTitle.value.trim() !== ""));
+
+function updateReaderTools() {
+  readerTools.hidden = !canWrite() || !!draft;
+  readerEditBtn.hidden = !readerPath || !notesByPath.has(readerPath);
+}
+
+/** Leave the editor if there's nothing to lose, or the owner agrees to lose it. False: stay. */
+function closeEditor(): boolean {
+  if (!draft) return true;
+  if (isDirty() && !window.confirm("Discard your unsaved changes?")) return false;
+  draft = null;
+  edText = edTitle = edFolder = edStatus = null;
+  readerEl.classList.remove("editing");
+  updateReaderTools();
+  return true;
+}
+
+function cancelEdit() {
+  if (closeEditor()) openReader(readerPath);
+}
+
+async function startEdit() {
+  if (!readerPath || !canWrite()) return;
+  const path = readerPath;
+  try {
+    const r = await api(`/api/note?path=${encodeURIComponent(path)}`);
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || r.statusText);
+    draft = { kind: "edit", path, base: d.hash, original: d.content };
+    renderEditor();
+  } catch (e) {
+    liveEl.textContent = `Couldn't open the note for editing: ${e instanceof Error ? e.message : e}`;
+  }
+}
+
+function startNew(kind: "note" | "request") {
+  if (!canWrite() || !closeEditor()) return;
+  if (mode !== "read") setMode("read");
+  draft = { kind, path: "", base: null, original: "" };
+  renderEditor();
+}
+
+function renderEditor() {
+  if (!draft) return;
+  const d = draft;
+  readerEl.classList.add("editing");
+  updateReaderTools();
+  readerDoc.innerHTML = "";
+  readerScroll.scrollTop = 0;
+  readerProgress.style.transform = "scaleX(0)";
+  const head = el("header", "reader-head editor-head", "");
+  const isNew = d.kind !== "edit";
+  head.appendChild(el("p", d.kind === "request" ? "eyebrow" : "eyebrow", d.kind === "edit" ? "Editing · your words land directly, no approval" : d.kind === "note" ? "New note" : "New request for your agents"));
+  if (isNew) {
+    edTitle = document.createElement("input");
+    edTitle.className = "ed-title";
+    edTitle.placeholder = d.kind === "request" ? "What do you want done?" : "Title";
+    edTitle.setAttribute("aria-label", "Title");
+    head.appendChild(edTitle);
+    const where = el("p", "ed-where", "");
+    if (d.kind === "request") {
+      where.textContent = `Saved in ${REQUESTS_DIR}/. Your agents can read it but never change it; they answer with proposals you approve.`;
+    } else {
+      where.appendChild(el("span", "", "Folder "));
+      edFolder = document.createElement("input");
+      edFolder.className = "ed-folder";
+      edFolder.placeholder = "(top of the vault)";
+      edFolder.setAttribute("aria-label", "Folder");
+      where.appendChild(edFolder);
+    }
+    head.appendChild(where);
+  } else {
+    const note = notesByPath.get(d.path);
+    head.appendChild(el("h1", "reader-title", note ? note.title : d.path));
+    head.appendChild(el("p", "ed-where", d.path));
+  }
+  readerDoc.appendChild(head);
+
+  edText = document.createElement("textarea");
+  edText.className = "ed-text";
+  edText.spellcheck = true;
+  edText.value = d.original;
+  edText.setAttribute("aria-label", "Note text (Markdown)");
+  edText.placeholder = d.kind === "request"
+    ? "Describe the task: what to research, summarise, link or reorganise, and where the result should go."
+    : d.kind === "note" ? "Write in Markdown. [[Wikilinks]] and #tags work as everywhere else." : "";
+  readerDoc.appendChild(edText);
+
+  const preview = el("div", "md ed-preview", "");
+  preview.hidden = true;
+  readerDoc.appendChild(preview);
+
+  const actions = el("div", "ed-actions", "");
+  const save = el("button", "ed-save", isNew ? (d.kind === "request" ? "Send request" : "Create note") : "Save") as HTMLButtonElement;
+  const prev = el("button", "ed-secondary", "Preview") as HTMLButtonElement;
+  const cancel = el("button", "ed-secondary", "Cancel") as HTMLButtonElement;
+  for (const b of [save, prev, cancel]) {
+    b.type = "button";
+    actions.appendChild(b);
+  }
+  actions.appendChild(el("span", "ed-hint", "Ctrl/⌘ S saves · Esc cancels"));
+  readerDoc.appendChild(actions);
+  edStatus = el("div", "ed-status", "");
+  edStatus.setAttribute("role", "status");
+  readerDoc.appendChild(edStatus);
+
+  save.addEventListener("click", () => saveDraft());
+  cancel.addEventListener("click", cancelEdit);
+  prev.addEventListener("click", () => {
+    const show = preview.hidden;
+    preview.hidden = !show;
+    edText!.hidden = show;
+    prev.textContent = show ? "Write" : "Preview";
+    if (show) {
+      preview.innerHTML = "";
+      const text = isNew ? newNoteContent(edTitle!.value || "Untitled", edText!.value) : edText!.value;
+      const blocks = parseBlocks(stripFrontmatter(text).body);
+      renderBlocks(blocks, readerLinks(d.path || "new.md"), preview);
+    }
+  });
+  (isNew ? edTitle! : edText).focus();
+}
+
+async function saveDraft(overrideBase?: string | null) {
+  if (!draft || !edText || edSaving) return;
+  const d = draft;
+  let path = d.path;
+  let content = edText.value;
+  if (d.kind !== "edit") {
+    const title = edTitle ? edTitle.value.trim() : "";
+    const p = newNotePath(title, d.kind === "request" ? REQUESTS_DIR : edFolder ? edFolder.value : "");
+    if (!p) {
+      setEdStatus("Give it a title first.");
+      if (edTitle) edTitle.focus();
+      return;
+    }
+    path = p;
+    content = newNoteContent(title, edText.value);
+  }
+  edSaving = true;
+  setEdStatus("Saving…");
+  try {
+    const r = await api("/api/note", "PUT", { path, content, base: overrideBase !== undefined ? overrideBase : d.base });
+    const res = await r.json();
+    if (r.status === 409) return showConflict(path, res);
+    if (!r.ok) throw new Error(res.error || r.statusText);
+    draft = null;
+    edText = edTitle = edFolder = edStatus = null;
+    readerEl.classList.remove("editing");
+    liveEl.textContent = d.kind === "edit" ? "Saved." : d.kind === "request" ? "Request sent to your agents." : "Note created.";
+    // pick up the new version (a poll may be mid-flight: try a few times)
+    for (let i = 0; i < 6; i++) {
+      await loadLive();
+      if (notesByPath.has(res.path)) break;
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    selected = null;
+    select(res.path);
+  } catch (e) {
+    setEdStatus(`Not saved: ${e instanceof Error ? e.message : e}`);
+  } finally {
+    edSaving = false;
+  }
+}
+
+function setEdStatus(text: string) {
+  if (!edStatus) return;
+  edStatus.innerHTML = "";
+  edStatus.textContent = text;
+}
+
+/** The note changed on disk while the owner was writing (or the name is taken): the owner decides. */
+function showConflict(path: string, res: { error?: string; current: string | null; hash: string | null }) {
+  if (!edStatus || !draft) return;
+  edStatus.innerHTML = "";
+  const box = el("div", "ed-conflict", "");
+  if (draft.kind !== "edit") {
+    box.appendChild(el("p", "", `A note called ${path} already exists. Choose another title (or folder).`));
+    edStatus.appendChild(box);
+    box.scrollIntoView({ block: "nearest" });
+    return;
+  }
+  box.appendChild(el("p", "", `${res.error || "This note changed on disk"}. Maybe an approved proposal or another app changed it while you were writing. Nothing was saved yet.`));
+  const keep = el("button", "ed-save", res.current === null ? "Save mine as a new note" : "Keep mine (replace what's on disk)") as HTMLButtonElement;
+  const theirs = el("button", "ed-secondary", "Load the disk version (lose mine)") as HTMLButtonElement;
+  keep.type = theirs.type = "button";
+  keep.addEventListener("click", () => saveDraft(res.hash));
+  theirs.addEventListener("click", () => {
+    if (!draft || !edText) return;
+    if (res.current === null) return cancelEdit();
+    draft.base = res.hash;
+    draft.original = res.current;
+    edText.value = res.current;
+    setEdStatus("Loaded the version on disk.");
+  });
+  const row = el("div", "ed-actions", "");
+  row.appendChild(keep);
+  row.appendChild(theirs);
+  box.appendChild(row);
+  edStatus.appendChild(box);
+  box.scrollIntoView({ block: "nearest" });
+}
+
+/** On a request note: where it stands and what agents proposed for it. */
+function requestBanner(r: RequestSummary) {
+  const box = el("section", "request-box req-" + r.status, "");
+  box.appendChild(el("p", "request-eyebrow", "Your request · " + REQUEST_STATUS_LABEL[r.status]));
+  if (!r.answers.length) box.appendChild(el("p", "proposal-meta", "Agents see it with list_requests and answer with proposals, which show up here. Add `status: done` to its frontmatter to close it."));
+  for (const a of r.answers) {
+    const row = el("p", "request-answer", "");
+    const target = a.to || a.path;
+    row.appendChild(el("span", "", `${a.client} · ${a.op} `));
+    if (notesByPath.has(target)) {
+      const b = el("button", "linkbtn inline", titles.get(target) || target) as HTMLButtonElement;
+      b.type = "button";
+      b.addEventListener("click", () => select(target));
+      row.appendChild(b);
+    } else row.appendChild(el("span", "", target));
+    // a pending answer is an agent proposal: that, and only that, is gold
+    row.appendChild(el("span", "answer-status s-" + a.status + (a.status === "pending" ? " proposal" : ""), " · " + (a.status === "pending" ? "waiting for your approval" : a.status)));
+    box.appendChild(row);
+  }
+  return box;
+}
+
+$("reader-new").addEventListener("click", () => startNew("note"));
+$("reader-new-request").addEventListener("click", () => startNew("request"));
+readerEditBtn.addEventListener("click", () => startEdit());
+document.addEventListener("keydown", (e) => {
+  if (draft && (e.metaKey || e.ctrlKey) && (e.key === "s" || e.key === "S")) {
+    e.preventDefault();
+    saveDraft();
+  }
+});
+window.addEventListener("beforeunload", (e) => {
+  if (isDirty()) {
+    e.preventDefault();
+    e.returnValue = "";
+  }
+});
 
 // ---- strand list (the accessible twin) ----------------------------------------
 
@@ -1086,7 +1385,8 @@ document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if (mode === "read") {
     e.preventDefault();
-    leaveReader();
+    if (draft) cancelEdit();
+    else leaveReader();
   } else if (document.activeElement !== canvas && selected) select(null);
 });
 canvas.addEventListener("dblclick", (e) => {

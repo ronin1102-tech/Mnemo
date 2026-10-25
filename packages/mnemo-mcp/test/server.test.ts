@@ -28,7 +28,7 @@ describe("mnemo mcp server", () => {
     const { client } = await connect({});
     const names = (await client.listTools()).tools.map((t) => t.name).sort();
     expect(names).toEqual(
-      ["append_note", "daily_note", "delete_note", "find_similar", "get_backlinks", "get_neighbors", "get_tags", "list_notes", "list_proposals", "list_recent", "move_note", "patch_note", "read_note", "search_notes", "write_note"],
+      ["append_note", "daily_note", "delete_note", "find_similar", "get_backlinks", "get_neighbors", "get_tags", "list_notes", "list_proposals", "list_recent", "list_requests", "move_note", "patch_note", "read_note", "search_notes", "write_note"],
     );
   });
 

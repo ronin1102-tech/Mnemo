@@ -6,6 +6,8 @@ const MDLINK = /\[[^\]\n]*\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)/g;
 export interface Frontmatter {
   title?: string;
   created?: string;
+  /** Free-form; requests use `status: done` to mark themselves closed. */
+  status?: string;
   tags: string[];
 }
 
@@ -20,7 +22,7 @@ export function parseFrontmatter(raw: string): { fm: Frontmatter; body: string; 
   if (!m) return { fm, body: text, hasFrontmatter: false };
   const lines = m[1].split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
-    const kv = lines[i].match(/^(title|created|tags)\s*:\s*(.*)$/i);
+    const kv = lines[i].match(/^(title|created|tags|status)\s*:\s*(.*)$/i);
     if (!kv) continue;
     const key = kv[1].toLowerCase();
     const val = kv[2].trim();
@@ -31,6 +33,7 @@ export function parseFrontmatter(raw: string): { fm: Frontmatter; body: string; 
       if (parts.length) fm.title = parts.join(" ");
     } else if (key === "title" && val) fm.title = unquote(val);
     else if (key === "created" && val) fm.created = unquote(val);
+    else if (key === "status" && val) fm.status = unquote(val);
     else if (key === "tags") {
       let items: string[] = [];
       if (val.startsWith("[")) items = val.replace(/^\[|\]$/g, "").split(",");

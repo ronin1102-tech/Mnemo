@@ -25,6 +25,24 @@ export interface PendingProposal {
   expiresAt?: string;
   /** False when the proposal would create a note that isn't in the vault yet. */
   exists?: boolean;
+  /** The owner request (a note in Requests/) this proposal answers. */
+  request?: string;
+}
+export interface RequestAnswer {
+  id: string;
+  op: string;
+  path: string;
+  to?: string;
+  client: string;
+  status: string;
+}
+/** One owner request and what agents have proposed for it (computed by the server). */
+export interface RequestSummary {
+  path: string;
+  title: string;
+  created: number | null;
+  status: "open" | "in-progress" | "addressed" | "closed";
+  answers: RequestAnswer[];
 }
 /** Shape written by `mnemo-mcp export-graph`. */
 export interface GraphData {
@@ -35,5 +53,8 @@ export interface GraphData {
   /** Set when served live by `mnemo-ctl ui`. */
   live?: boolean;
   readOnly?: boolean;
+  /** Live, on the vault's own computer, not read-only: the owner may write. */
+  canWrite?: boolean;
+  requests?: RequestSummary[];
   version?: number;
 }

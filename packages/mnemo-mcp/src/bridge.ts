@@ -7,7 +7,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { graphPayload } from "./graph.js";
 import { Index } from "./indexer.js";
 import { makeLogger } from "./log.js";
-import { ProposalStore, type SettledBy } from "./proposals.js";
+import { MAX_NOTE_BYTES, ProposalStore, type SettledBy } from "./proposals.js";
 import { createServer as createMcpServer } from "./server.js";
 import { TokenStore, type TokenRecord } from "./tokens.js";
 import { Vault, VaultError } from "./vault.js";
@@ -26,6 +26,12 @@ import { Vault, VaultError } from "./vault.js";
  *     each MCP session is pinned to the key that opened it; proposals record the key's name;
  *   - read-only keys (and --read-only) get no write tools and no approve/reject.
  * Approve/reject call the same ProposalStore as mnemo-ctl, so what lands is identical.
+ *
+ * Owner writes (PUT /api/note): the owner's own notes and requests are not proposals; they land
+ * directly, through the same atomic writer. Only the Helix on this computer may write: the local
+ * session key, over loopback, and never in read-only mode. Person keys read and settle, never write.
+ * A save names the version it was edited from, so it can't silently overwrite a change that landed
+ * meanwhile (an approved proposal, another editor); the owner then chooses.
  */
 export interface BridgeOptions {
   port?: number; // 0 picks a free port
@@ -62,6 +68,9 @@ const SECURITY_HEADERS = {
 /** MCP request bodies: above the 10 MB note cap even after JSON escaping, so the app refuses cleanly. */
 const MAX_BODY = 64 * 1024 * 1024;
 const MAX_SESSIONS = 64;
+
+const sha = (s: string) => crypto.createHash("sha256").update(s).digest("hex");
+const isLoopback = (a: string | undefined) => a === "127.0.0.1" || a === "::1" || a === "::ffff:127.0.0.1";
 
 /** Loopback or Tailscale only. Never 0.0.0.0, never a LAN or public interface. */
 export function isAllowedBind(addr: string): boolean {
@@ -225,18 +234,45 @@ export async function startBridge(vault: Vault, opts: BridgeOptions) {
     }
     const readOnly = !!opts.readOnly || !!(person && person.readOnly);
     const by: SettledBy = person ? { actor: "helix", user: person.name } : store.human("helix");
+    const canWrite = local && !readOnly && isLoopback(req.socket.remoteAddress);
 
     try {
       if (req.method === "GET" && url.pathname === "/api/version") return send(200, { version: refresh() });
       if (req.method === "GET" && url.pathname === "/api/graph") {
         refresh();
-        return send(200, { ...graphPayload(vault, index, store), live: true, readOnly, version, viewer: person ? person.name : "this computer" });
+        return send(200, { ...graphPayload(vault, index, store), live: true, readOnly, canWrite, version, viewer: person ? person.name : "this computer" });
       }
       // the full text of one note, for the Helix reader (the same jail as every agent path: .md only, never .mnemo/)
       if (req.method === "GET" && url.pathname === "/api/note") {
         const rel = vault.normalize(url.searchParams.get("path") || "");
         if (rel.split("/").some((seg) => seg.startsWith("."))) throw new VaultError(`Note not found: ${rel}`);
-        return send(200, { path: rel, content: vault.read(rel) });
+        const content = vault.read(rel);
+        return send(200, { path: rel, content, hash: sha(content) });
+      }
+      // the owner's own write: create (base null) or replace (base = hash of the version edited)
+      if (req.method === "PUT" && url.pathname === "/api/note") {
+        if (!canWrite) return send(403, { error: readOnly ? "read-only: writing is disabled" : "Writing is only available in the Helix on the vault's own computer" });
+        const raw = await readBody(req, MAX_BODY);
+        if (raw === null) return send(413, { error: "note too large" });
+        let body: { path?: unknown; content?: unknown; base?: unknown };
+        try {
+          body = JSON.parse(raw.toString("utf8"));
+        } catch {
+          return send(400, { error: "invalid JSON" });
+        }
+        if (typeof body.path !== "string" || typeof body.content !== "string" || !(body.base === null || typeof body.base === "string")) return send(400, { error: "expected { path, content, base }" });
+        const rel = vault.normalize(body.path);
+        if (rel.split("/").some((seg) => seg.startsWith("."))) throw new VaultError("Notes can't live in hidden folders");
+        if (Buffer.byteLength(body.content) > MAX_NOTE_BYTES) throw new VaultError("Note exceeds 10MB limit");
+        const current = vault.exists(rel) ? vault.read(rel) : null;
+        const currentHash = current === null ? null : sha(current);
+        if (body.base !== currentHash) {
+          return send(409, { error: current === null ? "This note no longer exists on disk" : body.base === null ? "A note with this name already exists" : "This note changed on disk since you opened it", path: rel, current, hash: currentHash });
+        }
+        vault.atomicWrite(rel, body.content);
+        log("owner-write", { action: current === null ? "create" : "edit", path: rel, bytes: Buffer.byteLength(body.content), by });
+        refresh();
+        return send(200, { path: rel, hash: sha(body.content), created: current === null });
       }
       const m = url.pathname.match(/^\/api\/proposals\/([a-z0-9-]+)(?:\/(approve|reject))?$/);
       if (m && req.method === "GET" && !m[2]) {
