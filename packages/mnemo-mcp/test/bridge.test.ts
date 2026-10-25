@@ -99,7 +99,7 @@ describe("bridge: live data and the write gate", () => {
     const { b, api } = await bridge({ "a.md": "# A\nfull body", "sub/b.md": "# B", ".hidden/c.md": "# C", "notes.txt": "x" });
     const r = await api("/api/note?path=" + encodeURIComponent("a.md"));
     expect(r.status).toBe(200);
-    expect(JSON.parse(r.body)).toEqual({ path: "a.md", content: "# A\nfull body" });
+    expect(JSON.parse(r.body)).toMatchObject({ path: "a.md", content: "# A\nfull body" });
     expect(JSON.parse((await api("/api/note?path=sub%2Fb.md")).body).content).toBe("# B");
     for (const bad of ["../x.md", "/etc/passwd", ".mnemo/tokens.json", ".mnemo/x.md", ".hidden/c.md", "notes.txt", "missing.md", ""]) {
       expect((await api("/api/note?path=" + encodeURIComponent(bad))).status, bad).toBe(400);

@@ -55,7 +55,7 @@ class Allowlist(unittest.TestCase):
         self.assertEqual(json.loads(out)["tool"], "daily_note")
 
     def test_allowlists_are_exactly_the_build_packet(self):
-        reads = {"search_notes", "read_note", "list_recent", "list_notes", "get_backlinks", "get_neighbors", "find_similar", "get_tags", "list_proposals", "daily_note"}
+        reads = {"search_notes", "read_note", "list_recent", "list_notes", "get_backlinks", "get_neighbors", "find_similar", "get_tags", "list_proposals", "daily_note", "list_requests"}
         writes = {"write_note", "append_note", "patch_note", "move_note", "delete_note"}
         self.assertEqual(set(client.PHASE_1), reads)
         self.assertEqual(set(client.PHASE_2), reads | writes)
@@ -288,8 +288,8 @@ class RealMnemoServer(unittest.TestCase):
         self.assertEqual(code, 0, err)
         data = json.loads(out)
         names = sorted(t["name"] for t in data["tools"])
-        self.assertEqual(data["count"], 15)
-        self.assertEqual(names, sorted(client.PHASE_2))  # exactly the 15 tools the two phases cover
+        self.assertEqual(data["count"], 16)
+        self.assertEqual(names, sorted(client.PHASE_2))  # exactly the 16 tools the two phases cover
         self.assertEqual(data["protocolVersion"], "2025-11-25")
         self.assertEqual(sorted(t["name"] for t in data["tools"] if t["allowed"]), sorted(client.PHASE_1))
 

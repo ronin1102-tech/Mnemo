@@ -1,6 +1,7 @@
 import type { Index, NoteMeta } from "./indexer.js";
 import { parseFrontmatter } from "./links.js";
 import type { ProposalStore } from "./proposals.js";
+import { listRequests } from "./requests.js";
 import type { Vault } from "./vault.js";
 
 /** First ~160 characters of the body, without frontmatter or the leading heading. */
@@ -23,6 +24,7 @@ export function graphPayload(vault: Vault, index: Index, store: ProposalStore) {
     createdAt: p.createdAt,
     expiresAt: p.expiresAt,
     exists: graph.nodes.some((n) => n.path === p.path),
+    ...(p.request ? { request: p.request } : {}),
   }));
-  return { generatedAt: new Date().toISOString(), ...graph, proposals };
+  return { generatedAt: new Date().toISOString(), ...graph, proposals, requests: listRequests(vault, store) };
 }

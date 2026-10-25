@@ -47,6 +47,7 @@ MAX_PAGES = 1000
 PHASE_1 = frozenset([
     "search_notes", "read_note", "list_recent", "list_notes", "get_backlinks",
     "get_neighbors", "find_similar", "get_tags", "list_proposals", "daily_note",
+    "list_requests",
 ])
 PHASE_2 = PHASE_1 | frozenset([
     "write_note", "append_note", "patch_note", "move_note", "delete_note",

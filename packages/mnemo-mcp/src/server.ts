@@ -6,6 +6,7 @@ import { Index } from "./indexer.js";
 import { makeLogger } from "./log.js";
 import { ProposalStore, type Proposal } from "./proposals.js";
 import { parseFrontmatter } from "./links.js";
+import { listRequests, REQUESTS_DIR } from "./requests.js";
 import { Vault, VaultError } from "./vault.js";
 
 export const DAILY_DIR = "daily";
@@ -143,33 +144,39 @@ export function createServer(vault: Vault, opts: ServerOptions = {}) {
     status: z.enum(["pending", "approved", "rejected", "expired", "stale"]).optional(),
   }, ({ status }) => proposals.list(status).map(({ changes: _c, ...p }) => p));
 
+  tool("list_requests", `Requests the vault's owner has written for agents: notes in ${REQUESTS_DIR}/. Read one with read_note. Agents cannot change them; answer one by proposing changes elsewhere with "request" set to its path. Status: open, in-progress (an answer awaits the owner), addressed (the owner approved an answer) or closed (the owner marked it done).`, {
+    status: z.enum(["open", "in-progress", "addressed", "closed"]).optional(),
+  }, ({ status }) => listRequests(vault, proposals).filter((r) => !status || r.status === status));
+
   if (!opts.readOnly) {
     const done = (p: Proposal) => {
-      log("proposal", { id: p.id, op: p.op, path: p.path, client: p.client });
+      log("proposal", { id: p.id, op: p.op, path: p.path, client: p.client, ...(p.request ? { request: p.request } : {}) });
       return {
         id: p.id,
         status: p.status,
         expiresAt: p.expiresAt,
+        ...(p.request ? { request: p.request } : {}),
         message: "Proposal saved. Nothing was written. A human must approve it with `mnemo-ctl approve`.",
         diff: capDiff(p.diff, 200) + (p.diff.split("\n").length > 200 ? "\n(full diff: `mnemo-ctl show " + p.id + "`)" : ""),
       };
     };
     const w = false;
+    const request = z.string().optional().describe(`Path of the owner request (in ${REQUESTS_DIR}/) this proposal answers, if any`);
     tool("write_note", "Propose creating or replacing a note. Does NOT modify the vault; a human approves it.", {
-      path: z.string(), content: z.string().max(MAX_NOTE_BYTES),
-    }, ({ path, content }) => done(proposals.proposeWrite(path, content, client())), w);
+      path: z.string(), content: z.string().max(MAX_NOTE_BYTES), request,
+    }, ({ path, content, request }) => done(proposals.proposeWrite(path, content, client(), request)), w);
     tool("append_note", "Propose appending text to an existing note. Does NOT modify the vault.", {
-      path: z.string(), content: z.string().max(MAX_NOTE_BYTES),
-    }, ({ path, content }) => done(proposals.proposeAppend(path, content, client())), w);
+      path: z.string(), content: z.string().max(MAX_NOTE_BYTES), request,
+    }, ({ path, content, request }) => done(proposals.proposeAppend(path, content, client(), request)), w);
     tool("patch_note", "Propose replacing one exact passage. `anchor` must match exactly once, otherwise the call fails and nothing is proposed.", {
-      path: z.string(), anchor: z.string().min(1).max(MAX_NOTE_BYTES), replacement: z.string().max(MAX_NOTE_BYTES),
-    }, ({ path, anchor, replacement }) => done(proposals.proposePatch(path, anchor, replacement, client())), w);
+      path: z.string(), anchor: z.string().min(1).max(MAX_NOTE_BYTES), replacement: z.string().max(MAX_NOTE_BYTES), request,
+    }, ({ path, anchor, replacement, request }) => done(proposals.proposePatch(path, anchor, replacement, client(), request)), w);
     tool("move_note", "Propose moving/renaming a note. Inbound [[wikilinks]] are rewritten in the same proposal.", {
-      from: z.string(), to: z.string(),
-    }, ({ from, to }) => done(proposals.proposeMove(from, to, client())), w);
+      from: z.string(), to: z.string(), request,
+    }, ({ from, to, request }) => done(proposals.proposeMove(from, to, client(), request)), w);
     tool("delete_note", "Propose deleting a note. On approval it moves to .mnemo/trash/, never destroyed.", {
-      path: z.string(),
-    }, ({ path }) => done(proposals.proposeDelete(path, client())), w);
+      path: z.string(), request,
+    }, ({ path, request }) => done(proposals.proposeDelete(path, client(), request)), w);
   }
 
   return { server, close: () => index.close() };

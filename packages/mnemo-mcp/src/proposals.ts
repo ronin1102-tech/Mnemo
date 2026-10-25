@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { lineDiff } from "./diff.js";
 import { rewriteLinks } from "./links.js";
+import { checkRequestRef, isRequestPath, REQUESTS_DIR } from "./requests.js";
 import { Vault, VaultError } from "./vault.js";
 
 export const PROPOSAL_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -44,6 +45,8 @@ export interface Proposal {
   /** When it was settled (approved, rejected, expired or halted as stale). */
   resolvedAt?: string;
   settledBy?: SettledBy;
+  /** The owner request (a note in Requests/) this proposal answers, if any. */
+  request?: string;
 }
 
 const sha = (s: string) => crypto.createHash("sha256").update(s).digest("hex");
@@ -92,7 +95,15 @@ export class ProposalStore {
     if (Buffer.byteLength(s) > MAX_NOTE_BYTES) throw new VaultError("Note exceeds 10MB limit");
   }
 
-  private create(op: ProposalOp, rel: string, changes: Change[], diff: string, client: string, to?: string): Proposal {
+  /** Requests/ is the owner's: agents read it, never change it. */
+  private agentPath(rel: string): string {
+    const p = this.vault.normalize(rel);
+    if (isRequestPath(p)) throw new VaultError(`${REQUESTS_DIR}/ holds the owner's requests: agents can read them but not change them. Answer a request by proposing changes elsewhere with "request" set to its path`);
+    return p;
+  }
+
+  private create(op: ProposalOp, rel: string, changes: Change[], diff: string, client: string, to?: string, request?: string): Proposal {
+    const req = request ? checkRequestRef(this.vault, request) : undefined;
     const created = this.now();
     const p: Proposal = {
       id: `${new Date(created).toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)}-${crypto.randomBytes(3).toString("hex")}`,
@@ -105,32 +116,33 @@ export class ProposalStore {
       status: "pending",
       changes,
       diff,
+      ...(req ? { request: req } : {}),
     };
     this.save(p);
     return p;
   }
 
-  private single(op: ProposalOp, rel: string, current: string | null, after: string | null, client: string) {
+  private single(op: ProposalOp, rel: string, current: string | null, after: string | null, client: string, request?: string) {
     if (after !== null) this.limit(after);
-    return this.create(op, rel, [{ path: rel, baseHash: current === null ? null : sha(current), after }], lineDiff(current ?? "", after ?? ""), client);
+    return this.create(op, rel, [{ path: rel, baseHash: current === null ? null : sha(current), after }], lineDiff(current ?? "", after ?? ""), client, undefined, request);
   }
 
-  /** Create or replace a note. */
-  proposeWrite(rel: string, content: string, client: string): Proposal {
-    const p = this.vault.normalize(rel);
-    return this.single("write", p, this.readCurrent(p), content, client);
+  /** Create or replace a note. `request`: the owner request this answers. */
+  proposeWrite(rel: string, content: string, client: string, request?: string): Proposal {
+    const p = this.agentPath(rel);
+    return this.single("write", p, this.readCurrent(p), content, client, request);
   }
 
-  proposeAppend(rel: string, content: string, client: string): Proposal {
-    const p = this.vault.normalize(rel);
+  proposeAppend(rel: string, content: string, client: string, request?: string): Proposal {
+    const p = this.agentPath(rel);
     const cur = this.readCurrent(p);
     if (cur === null) throw new VaultError(`Cannot append to missing note: ${p}`);
-    return this.single("append", p, cur, cur + (cur === "" || cur.endsWith("\n") ? "" : "\n") + content, client);
+    return this.single("append", p, cur, cur + (cur === "" || cur.endsWith("\n") ? "" : "\n") + content, client, request);
   }
 
   /** Replace one exact occurrence of `anchor`. Fails closed: zero or multiple matches is an error, never a guess. */
-  proposePatch(rel: string, anchor: string, replacement: string, client: string): Proposal {
-    const p = this.vault.normalize(rel);
+  proposePatch(rel: string, anchor: string, replacement: string, client: string, request?: string): Proposal {
+    const p = this.agentPath(rel);
     const cur = this.readCurrent(p);
     if (cur === null) throw new VaultError(`Note not found: ${p}`);
     if (Buffer.byteLength(cur) > MAX_NOTE_BYTES) throw new VaultError("Note is over 10MB: readable, but not patchable");
@@ -138,20 +150,23 @@ export class ProposalStore {
     const first = cur.indexOf(anchor);
     if (first < 0) throw new VaultError("Anchor not found; nothing proposed");
     if (cur.indexOf(anchor, first + 1) >= 0) throw new VaultError("Anchor matches more than once; use a longer, unique anchor");
-    return this.single("patch", p, cur, cur.slice(0, first) + replacement + cur.slice(first + anchor.length), client);
+    return this.single("patch", p, cur, cur.slice(0, first) + replacement + cur.slice(first + anchor.length), client, request);
   }
 
-  proposeDelete(rel: string, client: string): Proposal {
-    const p = this.vault.normalize(rel);
+  proposeDelete(rel: string, client: string, request?: string): Proposal {
+    const p = this.agentPath(rel);
     const cur = this.readCurrent(p);
     if (cur === null) throw new VaultError(`Note not found: ${p}`);
-    return this.single("delete", p, cur, null, client);
+    return this.single("delete", p, cur, null, client, request);
   }
 
-  /** Move/rename a note and rewrite every inbound wikilink in the same proposal. */
-  proposeMove(fromRel: string, toRel: string, client: string): Proposal {
-    const from = this.vault.normalize(fromRel);
-    const to = this.vault.normalize(toRel);
+  /**
+   * Move/rename a note and rewrite every inbound wikilink in the same proposal. Links inside the
+   * owner's Requests/ are left as written (a basename wikilink still resolves after a folder move).
+   */
+  proposeMove(fromRel: string, toRel: string, client: string, request?: string): Proposal {
+    const from = this.agentPath(fromRel);
+    const to = this.agentPath(toRel);
     if (from === to) throw new VaultError("Source and destination are the same");
     const cur = this.readCurrent(from);
     if (cur === null) throw new VaultError(`Note not found: ${from}`);
@@ -160,7 +175,7 @@ export class ProposalStore {
     const changes: Change[] = [{ path: from, baseHash: sha(cur), after: null }];
     const parts = [`move ${from} -> ${to}`];
     for (const other of all) {
-      if (other === from) continue;
+      if (other === from || isRequestPath(other)) continue;
       const body = this.vault.read(other);
       const next = rewriteLinks(body, all, other, from, to);
       if (next === body) continue;
@@ -168,7 +183,7 @@ export class ProposalStore {
       changes.push({ path: other, baseHash: sha(body), after: next });
       parts.push(`\n@@ ${other} (link rewrite)\n${lineDiff(body, next)}`);
     }
-    return this.create("move", from, changes, parts.join("\n"), client, to);
+    return this.create("move", from, changes, parts.join("\n"), client, to, request);
   }
 
   /** Mark overdue pending proposals expired. Runs on every read of the store. */

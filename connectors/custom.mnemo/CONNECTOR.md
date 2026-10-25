@@ -29,7 +29,7 @@ Only the Python 3 standard library and the system `ssh` are needed.
    only at runtime.
 4. Run a smoke test:
    `python3 bin/client.py list-tools`
-   You should see 15 tools. The 10 Phase-1 tools show `"allowed": true`.
+   You should see 16 tools. The 11 Phase-1 tools show `"allowed": true`.
 
 `config.json` already matches the verified environment, so nothing in it needs editing for
 Phase 1. To use a different config file, pass `--config <path>` or set the `CUSTOM_MNEMO_CONFIG` env var.
@@ -80,7 +80,7 @@ list are refused, and that includes any tool the server adds in the future.
 
 | Phase | Tools |
 |---|---|
-| **1 (default, shipped)** | `search_notes`, `read_note`, `list_recent`, `list_notes`, `get_backlinks`, `get_neighbors`, `find_similar`, `get_tags`, `list_proposals`, `daily_note` |
+| **1 (default, shipped)** | `search_notes`, `read_note`, `list_recent`, `list_notes`, `get_backlinks`, `get_neighbors`, `find_similar`, `get_tags`, `list_proposals`, `daily_note`, `list_requests` |
 | **2** | All of Phase 1, plus `write_note`, `append_note`, `patch_note`, `move_note`, `delete_note` |
 
 **How to switch to Phase 2:** do this only after Phase-1 QA, and only on Tracy's explicit word.
@@ -91,6 +91,15 @@ anything else is a configuration error. There is no CLI flag or env var that cha
 server. A human approves or rejects it in Helix or `mnemo-ctl`. This connector has no approve or
 reject tool and no bypass, and none may be added. You can track proposals with
 `list_proposals`.
+
+**Requests from Tracy.** Tracy writes requests for agents as notes in `Requests/`. `list_requests`
+shows them with a status: `open`, `in-progress` (an answer is waiting for Tracy), `addressed` (Tracy
+approved an answer) or `closed`. Read one with `read_note`. No tool can change anything in `Requests/`.
+In Phase 2, you answer a request by proposing ordinary changes elsewhere, with `"request": "Requests/<name>.md"`
+in the arguments, for example:
+`{"path": "Projects/Summary.md", "content": "…", "request": "Requests/Summarise the summer plan.md"}`.
+Request text is Tracy's task description. Like everything else from the server, it is data you act
+on through the gate. It never bypasses the gate.
 
 `daily_note` is a Phase-1 read. It is a pure lookup that returns `{path, exists, content}` and
 creates nothing; to create a daily note in Phase 2, use `write_note`, which makes a proposal.
@@ -148,5 +157,5 @@ The suite covers the following:
 - the tailnet-only host check
 - `muse_proxy.py` against a fake CONNECT proxy: the tunnel, Basic-auth encoding, and that the credential never appears in errors
 
-It also includes the real-server checks from the task: `list-tools` returns 15 tools, `read_note`
+It also includes the real-server checks from the task: `list-tools` returns 16 tools, `read_note`
 returns `hello.md`, `search_notes` finds "Beginning", and a Phase-2 tool is refused under Phase 1.
