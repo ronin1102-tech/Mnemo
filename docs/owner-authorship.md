@@ -7,14 +7,19 @@ Scope: Vesper's scoping note of Oct 25, 2026. Tracy's decisions, also Oct 25:
 | Owner writes: instant, or a draft mode? | **Instant.** A save names the version it was edited from. If the note changed on disk since then, nothing is written and the owner chooses: keep theirs, or load the disk version. |
 | Owner proposals: requests only, or also verbatim drafts? | **Requests only.** Agents answer with ordinary gated proposals. |
 | Where requests live | **A `Requests/` folder** of plain `.md` notes. This is the one mechanism. |
-| Who can write from the Helix | **Only the Helix on the vault's own computer.** Person keys on the tailnet can read and settle, but not write. |
+| Who can write from the Helix | **The Helix on the vault's own computer, and person keys** (changed Oct 25, see below). Read-only keys and `--read-only` mode never write. Agent keys never reach the Helix at all. |
 
 ## Part 1: the owner's notes
 
 - In the Helix **Read** tab, the owner has three actions: **+ Note**, **+ Request** and **Edit**. The editor takes plain Markdown in a text box and has a Preview. Ctrl/⌘ S saves; Esc cancels and asks first if anything is unsaved.
 - **Writing:** saves go to `PUT /api/note` on the bridge. That calls `Vault.atomicWrite`, the same temp → fsync → rename writer that approvals use. There is no second write path. The index picks the change up on the next sync, as it does with any disk edit.
-- **Who may write:** a save is accepted only from the local session key, over loopback, and never in `--read-only` mode. Person keys get 403. The data the Helix loads tells it whether to show the editor (`canWrite`).
-- **Attribution:** every owner write is logged to `.mnemo/logs/mnemo.log` as `owner-write`, with the action (`create` or `edit`), the path, the size, and `by: { actor: "helix", user }`.
+- **Who may write:**
+  - the local session key (Mnemo.app / `mnemo-ctl ui`), over loopback;
+  - any person key that isn't read-only, from any address the hub allows (for example Tracy's phone over the tailnet).
+
+  Read-only person keys and `--read-only` mode get 403. Agent keys are refused at the door (401) on every Helix route, writing and approval included. The data the Helix loads tells it whether to show the editor (`canWrite`). Revoking a key (`mnemo-ctl token revoke <name>`) ends its writing on the next request.
+- **Key model (Tracy, Oct 25: "person keys write too"):** a person key is the owner's own pen on another device. It writes directly, like the Mac does, not as a proposal. Issue `--person` keys only to people you'd let edit your vault yourself; anyone who should only look and approve gets `token add <name> --person --read-only`.
+- **Attribution:** every owner write is logged to `.mnemo/logs/mnemo.log` as `owner-write`, with the action (`create` or `edit`), the path, the size, and `by: { actor: "helix", user }`. A person-key write also carries `actor: "person:<key name>"`, and `user` is the key's name. There are no anonymous writes.
 - **Text is kept exactly:** the editor holds the whole file, frontmatter included, and saves exactly what was typed. A new note is `# <title>` followed by the body.
 - **Conflict with agents:** a pending agent proposal on a note the owner edits goes `stale` when someone settles it, through the existing halt. The owner's bytes stay.
 
@@ -45,7 +50,8 @@ This already existed: the bridge (`mnemo-ctl ui` / `hub` / Mnemo.app) serves the
 | An owner write lands byte for byte, atomically, and the index reflects it without a restart | `packages/mnemo-mcp/test/owner.test.ts` |
 | An agent proposal against a note the owner edited settles as stale, and the owner's bytes stay | same |
 | A request can be read over MCP, written by no agent tool, and answered through the gate, with the status following | same |
-| Read-only mode and person keys: no editor, and writes refused | same |
+| Person keys write: byte for byte, 409 on conflicts, logged with the key's name; revoking ends it | same |
+| Agent keys, read-only keys and `--read-only` mode (person keys included): no editor, and writes refused | same |
 | Catalina: the editor renders and accepts input on the floor machine | joins the hardware pass list. It is a plain `<textarea>`, with no editor dependency. |
 
 ## Agents

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Mnemo owner-authorship QA (PR #8). Runs on the Mac against a THROWAWAY vault in /tmp.
+# Mnemo owner-authorship QA (PR #8, plus person-key writes). Runs on the Mac against a THROWAWAY vault in /tmp.
 # It never reads or writes ~/Mnemo-Vault. Prints PASS/FAIL per check and exits non-zero on any FAIL.
 NODE_BIN="${NODE_BIN:-/Users/onemoretimetrizzy/.nvm/versions/node/v20.20.2/bin}"
 MNEMO="${MNEMO:-$HOME/Mnemo-main}"
@@ -23,7 +23,7 @@ api() { curl -s -o "$OUT" -w '%{http_code}' -X "$1" -H "X-Mnemo-Token: ${4:-$TOK
 # field NAME: read one (dotted) field of the last response
 field() { node -e 'const d=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));const v=process.argv[2].split(".").reduce((o,k)=>o==null?o:o[k],d);console.log(typeof v==="object"?JSON.stringify(v):String(v))' "$OUT" "$1"; }
 body() { node -e 'console.log(JSON.stringify({path:process.argv[1],content:require("fs").readFileSync(process.argv[2],"utf8"),base:process.argv[3]==="null"?null:process.argv[3]}))' "$1" "$2" "$3"; }
-hash() { api GET "/api/note?path=$(node -e 'console.log(encodeURIComponent(process.argv[1]))' "$1")" >/dev/null; field hash; }
+hash() { api GET "/api/note?path=$(node -e 'console.log(encodeURIComponent(process.argv[1]))' "$1")" "" "$TOKEN" >/dev/null; field hash; }
 gate() { node --input-type=module -e "import { ProposalStore } from 'file://$DIST/proposals.js'; import { Vault } from 'file://$DIST/vault.js'; const s = new ProposalStore(new Vault(process.argv[1])); const [op, ...a] = process.argv.slice(2); try { const p = s[op](...a); console.log(p.id); } catch (e) { console.log('REFUSED: ' + e.message); }" "$V" "$@"; }
 
 echo "Mnemo owner-authorship QA · $(node -v) · vault $V"
@@ -81,14 +81,45 @@ check "request status: addressed"          "$(node -e 'console.log(JSON.parse(re
 check "request file never rewritten"       "$(cmp -s "$V.req" "$V/Requests/Summarise hello.md" && echo same || echo different)" same
 check "mnemo-ctl show names the request"   "$($CTL --vault "$V" show "$AID" | grep -c 'answers request: Requests/Summarise hello.md')" 1
 
-# 5. person keys and read-only mode cannot write
+# 5. person keys write too (Tracy's phone over the tailnet hub), attributed by key name
 KEY=$($CTL --vault "$V" token add qa-person --person 2>/dev/null | grep -o 'mn_p_[A-Za-z0-9_-]*')
-check "person key: canWrite false"         "$(api GET /api/graph "" "$KEY" >/dev/null; field canWrite)" false
-check "person key: write refused (403)"    "$(api PUT /api/note "$(body 'p.md' "$V.mine" null)" "$KEY")" 403
+check "person key: canWrite true"          "$(api GET /api/graph "" "$KEY" >/dev/null; field canWrite)" true
+printf '# From the phone\nbyte \342\234\223 for\tbyte\r\n' > "$V.phone"
+check "person key: create returns 200"     "$(api PUT /api/note "$(body 'Phone/idea.md' "$V.phone" null)" "$KEY")" 200
+check "person key: byte-for-byte on disk"  "$(cmp -s "$V.phone" "$V/Phone/idea.md" && echo same || echo different)" same
+PH=$(TOKEN=$KEY hash 'Phone/idea.md')
+check "person key: edit with base: 200"    "$(api PUT /api/note "$(body 'Phone/idea.md' "$V.edit" "$PH")" "$KEY")" 200
+check "person key: stale base: 409"        "$(api PUT /api/note "$(body 'Phone/idea.md' "$V.mine" "$PH")" "$KEY")" 409
+check "person key: create over existing: 409" "$(api PUT /api/note "$(body 'hello.md' "$V.mine" null)" "$KEY")" 409
+check "person key: log names the key"      "$(grep '"event":"owner-write"' "$V/.mnemo/logs/mnemo.log" | grep -c '"actor":"person:qa-person"')" 2
+printf '# From the phone: list my ideas\nCollect Phone/ into one index note.\n' > "$V.preq"
+check "person key: create a request"       "$(api PUT /api/note "$(body 'Requests/Phone ask.md' "$V.preq" null)" "$KEY")" 200
+check "agent refused on that request"      "$(gate proposeWrite 'Requests/Phone ask.md' hijack qa-agent | cut -c1-8)" "REFUSED:"
+gate proposeWrite Ideas.md $'# Ideas\n' qa-agent 'Requests/Phone ask.md' > /dev/null
+api GET /api/graph "" "$KEY" >/dev/null
+check "its status: in-progress"            "$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1])).requests.find(r=>r.path==="Requests/Phone ask.md").status)' "$OUT")" in-progress
+check "request file not rewritten"         "$(cmp -s "$V.preq" "$V/Requests/Phone ask.md" && echo same || echo different)" same
+
+# 6. agent keys and read-only keys never write; revoking a person key ends its writing
+AKEY=$($CTL --vault "$V" token add qa-agent-key --agent 2>/dev/null | grep -o 'mn_a_[A-Za-z0-9_-]*')
+BEFORE=$(cat "$V/hello.md")
+check "agent key: write refused"           "$(api PUT /api/note "$(body hello.md "$V.mine" "$(hash hello.md)")" "$AKEY")" 401
+check "agent key: zero bytes changed"      "$(cat "$V/hello.md")" "$BEFORE"
+check "agent key: approval API refused"    "$(api POST "/api/proposals/$AID/approve" "" "$AKEY")" 401
+RKEY=$($CTL --vault "$V" token add qa-viewer --person --read-only 2>/dev/null | grep -o 'mn_p_[A-Za-z0-9_-]*')
+check "read-only person key: canWrite false" "$(api GET /api/graph "" "$RKEY" >/dev/null; field canWrite)" false
+check "read-only person key: 403"          "$(api PUT /api/note "$(body 'v.md' "$V.mine" null)" "$RKEY")" 403
+$CTL --vault "$V" token revoke qa-person > /dev/null 2>&1
+check "revoked person key: refused"        "$(api PUT /api/note "$(body 'Phone/late.md' "$V.mine" null)" "$KEY")" 401
 stop_ui
+
+# 7. --read-only mode: nobody writes, person keys included
 start_ui --read-only
+KEY2=$($CTL --vault "$V" token add qa-person-2 --person 2>/dev/null | grep -o 'mn_p_[A-Za-z0-9_-]*')
 check "read-only: canWrite false"          "$(api GET /api/graph >/dev/null; field canWrite)" false
 check "read-only: write refused (403)"     "$(api PUT /api/note "$(body 'r.md' "$V.mine" null)")" 403
+check "read-only + person key: canWrite false" "$(api GET /api/graph "" "$KEY2" >/dev/null; field canWrite)" false
+check "read-only + person key: 403"        "$(api PUT /api/note "$(body 'r.md' "$V.mine" null)" "$KEY2")" 403
 stop_ui
 
 echo "----"

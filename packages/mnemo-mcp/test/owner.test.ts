@@ -96,16 +96,55 @@ describe("owner writes: the owner's own pen, not a proposal", () => {
     expect(read("a.md")).toBe("owner version");
     await b.close();
   });
-  it("only the Helix on this computer writes: person keys, read-only mode and bad paths are refused", async () => {
-    const { b, save, keys, root } = await owner({ "a.md": "x" });
-    const person = keys.add("office-tracy", "person");
-    expect((await save("p.md", "x", null, person)).status).toBe(403);
+  it("person keys write too (from any allowed address), each write logged with the key's name", async () => {
+    const { b, req, save, keys, read, root, store } = await owner({ "a.md": "x" });
+    const k = keys.add("tracy", "person");
+    expect((await req("/api/graph", { token: k })).data.canWrite).toBe(true);
+    const typed = "# From my phone\nbyte ✓ for\tbyte\r\n";
+    expect((await save("Phone/idea.md", typed, null, k)).status).toBe(200);
+    expect(read("Phone/idea.md")).toBe(typed);
+    const h = (await req("/api/note?path=Phone%2Fidea.md", { token: k })).data.hash;
+    expect((await save("Phone/idea.md", "edited\n", h, k)).status).toBe(200);
+    expect(read("Phone/idea.md")).toBe("edited\n");
+    expect((await save("Phone/idea.md", "stale\n", h, k)).status).toBe(409);
+    expect((await save("a.md", "over", null, k)).status).toBe(409);
+    expect(read("a.md")).toBe("x");
+    // a request from the phone is the owner's own; agents still can't touch it, only answer it
+    expect((await save("Requests/from phone.md", "# Do a thing\n", null, k)).status).toBe(200);
+    expect(() => store.proposeWrite("Requests/from phone.md", "hijack", "agent-x")).toThrow(/owner's requests/);
+    store.proposeWrite("Answer.md", "# Answer\n", "agent-x", "Requests/from phone.md");
+    expect((await req("/api/graph", { token: k })).data.requests[0].status).toBe("in-progress");
+    expect(read("Requests/from phone.md")).toBe("# Do a thing\n");
+    const log = fs.readFileSync(path.join(root, ".mnemo/logs/mnemo.log"), "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((l) => l.event === "owner-write");
+    expect(log.map((l) => [l.action, l.path, l.actor, l.by.user])).toEqual([
+      ["create", "Phone/idea.md", "person:tracy", "tracy"],
+      ["edit", "Phone/idea.md", "person:tracy", "tracy"],
+      ["create", "Requests/from phone.md", "person:tracy", "tracy"],
+    ]);
+    // revoking the key ends writing with everything else
+    keys.revoke("tracy");
+    expect((await save("Phone/late.md", "x", null, k)).status).toBe(401);
+    expect(fs.existsSync(path.join(root, "Phone/late.md"))).toBe(false);
+    await b.close();
+  });
+  it("agent keys, read-only keys, --read-only mode and bad paths never write", async () => {
+    const { b, req, save, keys, read, root } = await owner({ "a.md": "x" });
+    const agentKey = keys.add("office-pc", "agent");
+    const viewer = keys.add("intern", "person", true);
+    expect((await save("a.md", "agent", null, agentKey)).status).toBe(401);
+    expect((await req("/api/proposals/20260101000000-abcdef/approve", { method: "POST", token: agentKey })).status).toBe(401);
+    expect((await req("/api/graph", { token: viewer })).data.canWrite).toBe(false);
+    expect((await save("v.md", "x", null, viewer)).status).toBe(403);
     for (const bad of ["../out.md", ".mnemo/x.md", ".hidden/x.md", "x.txt", "/etc/x.md"]) expect((await save(bad, "x", null)).status).toBe(400);
-    expect(fs.existsSync(path.join(root, "p.md"))).toBe(false);
+    expect(read("a.md")).toBe("x");
+    expect(fs.readdirSync(root).sort()).toEqual([".mnemo", "a.md"]);
     await b.close();
     const ro = await owner({ "a.md": "x" }, true);
-    expect((await ro.req("/api/graph")).data.canWrite).toBe(false);
-    expect((await ro.save("a.md", "y", await ro.hashOf("a.md"))).status).toBe(403);
+    const k = ro.keys.add("tracy", "person");
+    for (const token of [undefined, k]) {
+      expect((await ro.req("/api/graph", { token })).data.canWrite).toBe(false);
+      expect((await ro.save("a.md", "y", await ro.hashOf("a.md"), token)).status).toBe(403);
+    }
     expect(ro.read("a.md")).toBe("x");
     await ro.b.close();
   });

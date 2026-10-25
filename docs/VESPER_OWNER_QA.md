@@ -51,13 +51,14 @@ export PATH=/Users/onemoretimetrizzy/.nvm/versions/node/v20.20.2/bin:$PATH
 bash ~/Mnemo-main/scripts/qa-owner-authorship.sh
 ```
 
-Expected: `33 passed, 0 failed`. The script runs on a throwaway vault in `/tmp`, on port 7391, and deletes it at the end. It never touches `~/Mnemo-Vault`. It covers every server-side item in the QA gate:
+Expected: `50 passed, 0 failed` (33 when first written; 50 since person keys can write). The script runs on a throwaway vault in `/tmp`, on port 7391, and deletes it at the end. It never touches `~/Mnemo-Vault`. It covers every server-side item in the QA gate:
 
 - **Owner writes:** saves land byte for byte and atomically; the index picks them up without a restart; each save is logged as `owner-write`.
 - **Conflicts:** a stale save gets 409 and the disk version is untouched; creating over an existing note gets 409; bad paths are refused.
 - **Stale proposals:** an agent proposal on a note Tracy then edits goes stale, and Tracy's bytes stay.
 - **Requests:** agents can't write, delete or create anything in `Requests/`; the status moves open → in-progress → addressed; the request file is never rewritten; `mnemo-ctl show` names the request.
-- **No writing elsewhere:** person keys and `--read-only` mode both get `canWrite: false` and 403.
+- **Person keys write** (Oct 25 change): byte for byte, 409 on conflicts, logged as `person:<name>`, revocable.
+- **No writing elsewhere:** agent keys get 401 with zero bytes changed; read-only person keys and `--read-only` mode get `canWrite: false` and 403.
 
 ## Step 3: update your connector (on your VM)
 

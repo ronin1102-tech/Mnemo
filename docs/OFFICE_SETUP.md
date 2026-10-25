@@ -19,7 +19,8 @@ Office machines install nothing from this repo: an agent needs only an MCP clien
 | One key per machine or person | `mnemo-ctl token add <name> --agent` or `--person`. Shown once; only a hash is stored (`.mnemo/tokens.json`, mode 600). Revoke any time; takes effect on the next request. |
 | Agent keys can't approve | An agent key works only on `/mcp`. It is refused by the approval API, so an agent can never approve its own proposal. |
 | Person keys can't use MCP | A person key works only on the Helix. |
-| Read-only keys | `--read-only` on `token add`: an agent gets no write tools; a person can look but not approve. |
+| Read-only keys | `--read-only` on `token add`: an agent gets no write tools; a person can look but not approve or write. |
+| Person keys write | A person key that isn't read-only can also write notes and requests in the Helix (Read tab), directly like on the Mac, logged as `person:<name>`. Give full person keys only to people you'd let edit your vault; use `--person --read-only` for everyone else. |
 | Audit | Every proposal records the key name (`office-thinkcentre (claude-code)`); every settlement records who (`helix (tracy)`, or `mnemo-ctl (<user>)`). `mnemo-ctl show <id>`. |
 | Host / Origin checks | Requests must be addressed to this Mac's own names (defeats DNS rebinding); cross-origin calls are refused. |
 | Recommended | In the Tailscale admin console, add an ACL so only the office machines can reach the Mac on the hub port. |
@@ -68,7 +69,7 @@ Open in any modern browser on the tailnet:
 ```
 http://onemoreizzysmbp.tail81e3a6.ts.net:7337/#token=<that person's key>
 ```
-The header shows **signed in as <name>**. Notes with a pending proposal pulse gold; **◆ proposals** lists them; **Review changes** shows the exact diff; **Approve** / **Reject** settle it, recorded under that person's name. The key is removed from the address bar on load; bookmark the bare address and re-open the full link when needed.
+The header shows **signed in as <name>**. Notes with a pending proposal pulse gold; **◆ proposals** lists them; **Review changes** shows the exact diff; **Approve** / **Reject** settle it, recorded under that person's name. With a full (not read-only) person key, the **Read** tab's **+ Note**, **+ Request** and **Edit** work too, logged under that name. The key is removed from the address bar on load; bookmark the bare address and re-open the full link when needed.
 
 ## Day to day
 | Task | Command (on the Mac) |

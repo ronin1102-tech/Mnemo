@@ -28,8 +28,10 @@ import { Vault, VaultError } from "./vault.js";
  * Approve/reject call the same ProposalStore as mnemo-ctl, so what lands is identical.
  *
  * Owner writes (PUT /api/note): the owner's own notes and requests are not proposals; they land
- * directly, through the same atomic writer. Only the Helix on this computer may write: the local
- * session key, over loopback, and never in read-only mode. Person keys read and settle, never write.
+ * directly, through the same atomic writer. Who may write: the local session key (over loopback),
+ * and person keys (from any allowed address, e.g. a phone on the tailnet), each write logged with the
+ * key's name. Never read-only keys, never in --read-only mode, never agent keys (they can't reach
+ * /api at all).
  * A save names the version it was edited from, so it can't silently overwrite a change that landed
  * meanwhile (an approved proposal, another editor); the owner then chooses.
  */
@@ -234,7 +236,7 @@ export async function startBridge(vault: Vault, opts: BridgeOptions) {
     }
     const readOnly = !!opts.readOnly || !!(person && person.readOnly);
     const by: SettledBy = person ? { actor: "helix", user: person.name } : store.human("helix");
-    const canWrite = local && !readOnly && isLoopback(req.socket.remoteAddress);
+    const canWrite = !readOnly && (person !== null || (local && isLoopback(req.socket.remoteAddress)));
 
     try {
       if (req.method === "GET" && url.pathname === "/api/version") return send(200, { version: refresh() });
@@ -251,7 +253,7 @@ export async function startBridge(vault: Vault, opts: BridgeOptions) {
       }
       // the owner's own write: create (base null) or replace (base = hash of the version edited)
       if (req.method === "PUT" && url.pathname === "/api/note") {
-        if (!canWrite) return send(403, { error: readOnly ? "read-only: writing is disabled" : "Writing is only available in the Helix on the vault's own computer" });
+        if (!canWrite) return send(403, { error: readOnly ? "read-only: writing is disabled" : "This session can't write: use the Helix on the vault's computer, or a person key" });
         const raw = await readBody(req, MAX_BODY);
         if (raw === null) return send(413, { error: "note too large" });
         let body: { path?: unknown; content?: unknown; base?: unknown };
@@ -270,7 +272,7 @@ export async function startBridge(vault: Vault, opts: BridgeOptions) {
           return send(409, { error: current === null ? "This note no longer exists on disk" : body.base === null ? "A note with this name already exists" : "This note changed on disk since you opened it", path: rel, current, hash: currentHash });
         }
         vault.atomicWrite(rel, body.content);
-        log("owner-write", { action: current === null ? "create" : "edit", path: rel, bytes: Buffer.byteLength(body.content), by });
+        log("owner-write", { action: current === null ? "create" : "edit", path: rel, bytes: Buffer.byteLength(body.content), by, ...(person ? { actor: `person:${person.name}` } : {}) });
         refresh();
         return send(200, { path: rel, hash: sha(body.content), created: current === null });
       }
