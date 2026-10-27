@@ -69,7 +69,9 @@ Open in any modern browser on the tailnet:
 ```
 http://onemoreizzysmbp.tail81e3a6.ts.net:7337/#token=<that person's key>
 ```
-The header shows **signed in as <name>**. Notes with a pending proposal pulse gold; **◆ proposals** lists them; **Review changes** shows the exact diff; **Approve** / **Reject** settle it, recorded under that person's name. With a full (not read-only) person key, the **Read** tab's **+ Note**, **+ Request** and **Edit** work too, logged under that name. The key is removed from the address bar on load; bookmark the bare address and re-open the full link when needed.
+The header shows **signed in as <name>**. Notes with a pending proposal pulse gold; **◆ proposals** lists them; **Review changes** shows the exact diff; **Approve** / **Reject** settle it, recorded under that person's name. With a full (not read-only) person key, the **Read** tab's **+ Note**, **+ Request** and **Edit** work too, logged under that name. The key is removed from the address bar on load. You can also open the bare address (a bookmark, a typed address, a new tab): the page shows **"This vault is locked. Enter your key."**. Paste the key (or the whole link) and press **Unlock**. A wrong key gets a plain error and another try; nothing is stored until it works.
+
+By default the key is held for that browser tab only. Tick **Remember this device** to keep it across browser restarts; leave it off on a shared computer. **Lock** (top bar) forgets the key on that device. Browsers keep keys per address, so the tailnet IP and the MagicDNS name each ask once: bookmark the MagicDNS name and use it every time. If a key is revoked while the page is open, the entry screen appears (anything you were typing stays on the page).
 
 ## Day to day
 | Task | Command (on the Mac) |

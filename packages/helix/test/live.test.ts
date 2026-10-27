@@ -1,4 +1,4 @@
-import { describeProposal, diffLines, expiresLabel, tokenFromHash } from "../src/live";
+import { describeProposal, diffLines, expiresLabel, keyFromInput, tokenFromHash } from "../src/live";
 import { describe, expect, it } from "./expect";
 
 describe("live mode helpers", () => {
@@ -8,6 +8,19 @@ describe("live mode helpers", () => {
     expect(tokenFromHash("#token=short")).toBe(null);
     expect(tokenFromHash("#token=<script>alert(1)</script>")).toBe(null);
     expect(tokenFromHash("")).toBe(null);
+  });
+  it("accepts a key as typed, pasted wrapped, or inside the whole link; refuses anything else", () => {
+    const k = "mn_p_abcdefghijklmnopqrstuvwxyz0123456789ABCD";
+    expect(keyFromInput(k)).toBe(k);
+    expect(keyFromInput(`  ${k}\n`)).toBe(k);
+    expect(keyFromInput("mn_p_abcdefghijklmnopqrstuv\nwxyz0123456789ABCD")).toBe(k);
+    expect(keyFromInput(`http://onemoreizzysmbp.tail81e3a6.ts.net:7337/#token=${k}`)).toBe(k);
+    expect(keyFromInput("")).toBe(null);
+    expect(keyFromInput("short")).toBe(null);
+    expect(keyFromInput("mn_p_" + "x".repeat(300))).toBe(null);
+    expect(keyFromInput("mn_p_abcdefghijklmnop!@#$")).toBe(null);
+    expect(keyFromInput("mn_p_abcdé\u0001fghijklmnopqrst")).toBe(null);
+    expect(keyFromInput("http://host/#nothing")).toBe(null);
   });
   it("classifies diff lines", () => {
     expect(diffLines("  same\n- old\n+ new\nmove a.md -> b.md")).toEqual([

@@ -37,6 +37,28 @@ button:focus, canvas:focus { outline: 2px solid rgba(230, 238, 252, 0.85); outli
 .chip[aria-pressed="false"] { opacity: .7; }
 .fx-icon { margin-right: 6px; color: var(--accent); }
 
+/* ---- front door: the key entry screen ---- */
+.lock { position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 50; display: flex; align-items: center; justify-content: center; padding: 16px; overflow-y: auto;
+  background: radial-gradient(120% 70% at 50% -10%, rgba(30, 58, 128, 0.45), transparent 60%), var(--bg); }
+.lock[hidden] { display: none; }
+.lock-card { width: 100%; max-width: 380px; margin: auto; padding: 28px 26px 22px; text-align: center; border-radius: 18px; background: var(--glass); border: 1px solid var(--line-hi);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.06); -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px); }
+.lock-mark { display: block; margin: 0 auto 10px; border-radius: 50%; box-shadow: 0 0 14px rgba(94, 143, 220, 0.5); }
+.lock-brand { margin: 0 0 18px; font: 600 15px/1 var(--serif); letter-spacing: 0.34em; padding-left: 0.34em; color: #dfe9ff; }
+.lock-lead { margin: 0 0 16px; font: 17px/1.4 var(--serif); color: var(--text); }
+.lock-key { display: block; width: 100%; padding: 11px 13px; border-radius: 10px; border: 1px solid var(--line-hi); background: rgba(0, 4, 16, 0.65); color: var(--text); font: 16px Menlo, Monaco, Consolas, monospace; }
+.lock-key:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(143, 188, 255, 0.2); }
+.lock-error { min-height: 1.4em; margin: 8px 0 4px; color: #f0a0a0; font-size: 13px; line-height: 1.4; text-align: left; }
+.lock-check { display: block; margin: 6px 0 0; color: var(--muted); font-size: 13px; text-align: left; cursor: pointer; }
+.lock-check input { margin-right: 8px; vertical-align: -1px; }
+.lock-note { margin: 8px 0 0; color: var(--dim); font-size: 12px; line-height: 1.5; text-align: left; }
+.lock-note:empty { display: none; }
+.lock-go { display: block; width: 100%; margin-top: 16px; padding: 11px 16px; border-radius: 10px; cursor: pointer; font: 600 15px var(--sans); color: #fff;
+  border: 1px solid rgba(143, 188, 255, 0.55); background: linear-gradient(180deg, rgba(143, 188, 255, 0.3), rgba(94, 143, 220, 0.18)); box-shadow: 0 0 16px rgba(94, 143, 220, 0.3); }
+.lock-go:hover { background: linear-gradient(180deg, rgba(143, 188, 255, 0.4), rgba(94, 143, 220, 0.26)); }
+.lock-go[disabled] { opacity: .6; cursor: default; }
+.lock-addr { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+
 /* ---- stage ---- */
 main { flex: 1; display: flex; min-height: 0; }
 .stage-wrap { position: relative; flex: 1; min-width: 0; overflow: hidden; }

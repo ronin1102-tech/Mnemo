@@ -23,6 +23,7 @@
   </nav>
   <span id="source" class="source"></span>
   <button type="button" id="proposals" class="chip proposal-chip" hidden></button>
+  <button type="button" id="lock-btn" class="chip" hidden aria-label="Lock: forget the key on this device">Lock</button>
   <button type="button" id="fx" class="chip" aria-pressed="true"><span class="fx-icon" aria-hidden="true">✦</span><span id="fx-label">Effects</span></button>
 </header>
 <main>
@@ -60,6 +61,21 @@
   </aside>
 </main>
 <div id="live" class="sr" role="status" aria-live="polite"></div>
+<div id="lock" class="lock" role="dialog" aria-modal="true" aria-labelledby="lock-lead" hidden>
+  <form id="lock-form" class="lock-card" autocomplete="off" novalidate>
+    <img class="lock-mark" src="brand-64.png" width="48" height="48" alt="">
+    <p class="lock-brand">MNEMO</p>
+    <p id="lock-lead" class="lock-lead">This vault is locked. Enter your key.</p>
+    <label class="sr" for="lock-key">Key</label>
+    <input id="lock-key" class="lock-key" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Paste your key" aria-describedby="lock-error">
+    <p id="lock-error" class="lock-error" role="alert"></p>
+    <label class="lock-check"><input id="lock-show" type="checkbox"> Show the key</label>
+    <label class="lock-check"><input id="lock-remember" type="checkbox"> Remember this device</label>
+    <p class="lock-note">Remembering keeps the key in this browser until you press Lock. Leave it off on a shared computer.</p>
+    <button id="lock-go" class="lock-go" type="submit">Unlock</button>
+    <p id="lock-addr" class="lock-note lock-addr"></p>
+  </form>
+</div>
 <script src="graph.js" onerror="void 0"></script>
 <script src="app.js"></script>
 </body>

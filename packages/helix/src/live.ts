@@ -6,6 +6,18 @@ export function tokenFromHash(hash: string): string | null {
   return m ? m[1] : null;
 }
 
+/**
+ * A key typed or pasted into the entry screen. Whitespace (a wrapped paste, a trailing newline) is
+ * dropped, and pasting the whole `...#token=KEY` link works too. Returns null if it can't be a key,
+ * so a stray character never reaches a request header.
+ */
+export function keyFromInput(input: string): string | null {
+  const s = input.replace(/\s+/g, "");
+  const hash = s.indexOf("#");
+  if (hash >= 0) return tokenFromHash(s.slice(hash));
+  return /^[A-Za-z0-9_-]{16,200}$/.test(s) ? s : null;
+}
+
 export type DiffKind = "add" | "del" | "ctx" | "note";
 
 /** Classify the server's diff lines ("+ ", "- ", "  ", or headers / notices). */
