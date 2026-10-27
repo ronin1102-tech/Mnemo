@@ -6,7 +6,7 @@ import { layoutGraph, layoutHelix, ROW_GAP, timeOf, withinHops } from "./layout"
 import type { GraphPoint, HelixLayout } from "./layout";
 import { drawBackground, drawDust, drawGraph, drawHelix, graphToScreen, helixPos, poolHit } from "./render";
 import type { GraphView } from "./render";
-import { describeProposal, diffLines, expiresLabel, tokenFromHash } from "./live";
+import { describeProposal, diffLines, expiresLabel, keyFromInput, tokenFromHash } from "./live";
 import { makeResolver, parseBlocks, plainText, slug, stripFrontmatter, wordCount } from "./markdown";
 import { isRequestPath, newNoteContent, newNotePath, REQUEST_STATUS_LABEL, REQUESTS_DIR } from "./owner";
 import { renderBlocks } from "./reader";
@@ -431,13 +431,35 @@ function linkGroup(label: string, paths: string[]) {
 // served by mnemo-ctl ui/hub (this computer, or another machine on the tailnet) rather than opened as a file
 const isLive = window.location.protocol === "http:" || window.location.protocol === "https:";
 let token: string | null = null;
+
+/**
+ * Where the key lives. By default it is held for this tab only (sessionStorage). "Remember this
+ * device" is the owner's explicit, per-device choice to keep it in localStorage across restarts.
+ * Browsers keep storage per origin, so the IP address and the MagicDNS name each hold their own.
+ */
+const KEY = "mnemo.token";
+const keyStore = {
+  get(area: "session" | "local"): string | null {
+    try { return (area === "session" ? window.sessionStorage : window.localStorage).getItem(KEY); } catch (_) { return null; }
+  },
+  set(area: "session" | "local", v: string) {
+    try { (area === "session" ? window.sessionStorage : window.localStorage).setItem(KEY, v); } catch (_) { /* blocked: the key still works for this page load */ }
+  },
+  remove(area: "session" | "local") {
+    try { (area === "session" ? window.sessionStorage : window.localStorage).removeItem(KEY); } catch (_) { /* nothing to remove */ }
+  },
+  /** Forget a key that stopped working, wherever it is held (but never some other, working key). */
+  forget(dead: string | null) {
+    for (const a of ["session", "local"] as const) if (dead && this.get(a) === dead) this.remove(a);
+  },
+};
+
 if (isLive) {
+  // a link with #token=... (the phone hub flow) wins; else this tab's key; else a remembered one
   token = tokenFromHash(window.location.hash);
-  try {
-    if (token) window.sessionStorage.setItem("mnemo.token", token);
-    else token = window.sessionStorage.getItem("mnemo.token");
-  } catch (_) { /* storage blocked: the token still works for this page load */ }
-  // keep the session key out of the address bar, history and screenshots
+  if (token) keyStore.set("session", token);
+  else token = keyStore.get("session") || keyStore.get("local");
+  // keep the key out of the address bar, history and screenshots
   if (window.location.hash) window.history.replaceState(null, "", window.location.pathname + window.location.search);
 }
 let liveVersion = 0;
@@ -471,11 +493,9 @@ async function loadLive() {
   if (liveBusy) return;
   liveBusy = true;
   try {
+    const failed = token;
     const r = await api("/api/graph");
-    if (r.status === 401) {
-      sourceEl.textContent = "This page needs its key: open the link from mnemo-ctl ui / hub (or your person key)";
-      return;
-    }
+    if (r.status === 401) return unauthorized(failed);
     const d = (await r.json()) as GraphData;
     liveVersion = d.version || 0;
     liveDown = false;
@@ -492,16 +512,107 @@ async function loadLive() {
 /** Poll for changes every 2 s while visible: notes edited on disk, proposals arriving or settling. */
 function pollLive() {
   if (!isLive || !token || liveBusy || document.hidden) return;
+  const failed = token;
   api("/api/version")
-    .then((r) => r.json())
-    .then((v: { version: number }) => {
-      if (liveDown || v.version !== liveVersion) loadLive();
+    .then((r) => (r.status === 401 ? null : r.json()))
+    .then((v: { version: number } | null) => {
+      if (v === null) unauthorized(failed);
+      else if (liveDown || v.version !== liveVersion) loadLive();
     })
     .catch(() => {
       liveDown = true;
       sourceEl.textContent = "Disconnected from the Mnemo hub (is it still running, and is Tailscale connected?)";
     });
 }
+
+// ---- the front door: key entry -----------------------------------------------------
+
+const lockEl = $<HTMLElement>("lock");
+const lockForm = $<HTMLFormElement>("lock-form");
+const lockKey = $<HTMLInputElement>("lock-key");
+const lockError = $<HTMLElement>("lock-error");
+const lockGo = $<HTMLButtonElement>("lock-go");
+const lockBtn = $<HTMLButtonElement>("lock-btn");
+const lockRemember = $<HTMLInputElement>("lock-remember");
+let pollTimer = 0;
+
+/** Begin (or resume) the live session with the key we hold. */
+function startLive() {
+  lockBtn.hidden = false;
+  if (!pollTimer) pollTimer = window.setInterval(pollLive, 2000);
+  loadLive();
+}
+
+function showLock(error: string) {
+  token = null;
+  lockEl.hidden = false;
+  lockBtn.hidden = true;
+  lockError.textContent = error;
+  lockKey.value = "";
+  lockKey.type = ($<HTMLInputElement>("lock-show").checked ? "text" : "password");
+  lockGo.disabled = false;
+  sourceEl.textContent = "Locked";
+  const host = window.location.host;
+  $("lock-addr").textContent = `You're at ${host}. Browsers keep keys per address, so open Mnemo the same way each time (the MagicDNS name is best) and you'll enter it once.`;
+  window.setTimeout(() => lockKey.focus(), 0);
+}
+
+/** The hub refused our key (wrong, or revoked): forget it and ask again. Anything typed or unsaved stays put. */
+function unauthorized(failed: string | null) {
+  keyStore.forget(failed);
+  showLock(failed ? "That key isn't accepted (it may have been revoked). Enter a key to continue." : "");
+}
+
+lockForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const key = keyFromInput(lockKey.value);
+  if (!key) {
+    lockError.textContent = "That doesn't look like a key. Paste the whole key, or the link you were given.";
+    lockKey.focus();
+    return;
+  }
+  lockGo.disabled = true;
+  lockError.textContent = "";
+  try {
+    // checked before anything is stored: a wrong key is never kept
+    const r = await fetch("/api/version", { headers: { "X-Mnemo-Token": key }, credentials: "omit", cache: "no-store" });
+    if (r.status === 401) {
+      lockError.textContent = "That key wasn't accepted. Check it and try again, or ask for a new one.";
+      lockKey.select();
+      return;
+    }
+    if (!r.ok) throw new Error(String(r.status));
+    keyStore.set("session", key);
+    if (lockRemember.checked) keyStore.set("local", key);
+    else keyStore.remove("local");
+    token = key;
+    lockEl.hidden = true;
+    lockKey.value = "";
+    sourceEl.textContent = "Connecting to your vault…";
+    liveDown = false;
+    startLive();
+  } catch (_) {
+    lockError.textContent = "Can't reach the vault. Is Mnemo running, and is Tailscale connected?";
+  } finally {
+    lockGo.disabled = false;
+  }
+});
+$("lock-show").addEventListener("change", (e) => { lockKey.type = (e.target as HTMLInputElement).checked ? "text" : "password"; });
+// the entry screen is modal: keep Tab inside it
+lockEl.addEventListener("keydown", (e) => {
+  if (e.key !== "Tab") return;
+  const f = Array.from(lockForm.querySelectorAll<HTMLElement>("input, button")).filter((x) => !(x as HTMLInputElement).disabled);
+  const i = f.indexOf(document.activeElement as HTMLElement);
+  if (e.shiftKey && i <= 0) { e.preventDefault(); f[f.length - 1].focus(); }
+  else if (!e.shiftKey && i === f.length - 1) { e.preventDefault(); f[0].focus(); }
+});
+// Lock: forget the key on this device and start over with nothing in memory
+lockBtn.addEventListener("click", () => {
+  if (!closeEditor()) return;
+  keyStore.remove("session");
+  keyStore.remove("local");
+  window.location.reload();
+});
 
 // a settled proposal makes its note flash once (helix spec section 4: no silent changes)
 let flash: { path: string; at: number; ok: boolean } | null = null;
@@ -1042,6 +1153,11 @@ async function saveDraft(overrideBase?: string | null) {
     const r = await api("/api/note", "PUT", { path, content, base: overrideBase !== undefined ? overrideBase : d.base });
     const res = await r.json();
     if (r.status === 409) return showConflict(path, res);
+    if (r.status === 401) {
+      // the key was revoked mid-edit: nothing was saved, and the text stays right here behind the entry screen
+      setEdStatus("Not saved: your key stopped working. Your text is still here; enter a key to continue.");
+      return unauthorized(token);
+    }
     if (!r.ok) throw new Error(res.error || r.statusText);
     draft = null;
     edText = edTitle = edFolder = edStatus = null;
@@ -1421,11 +1537,10 @@ proposalsBtn.addEventListener("click", () => {
 
 if (isLive) {
   buildModel(data);
-  sourceEl.textContent = token ? "Connecting to your vault…" : "This page needs its key: open the link from mnemo-ctl ui / hub (or your person key)";
   if (token) {
-    loadLive();
-    window.setInterval(pollLive, 2000);
-  }
+    sourceEl.textContent = "Connecting to your vault…";
+    startLive();
+  } else showLock("");
 } else {
   const d = injected || demoData();
   buildModel(d);
