@@ -4,7 +4,9 @@ import { QualityGovernor, TIERS, TIER_NAMES } from "./fx";
 import type { Tier } from "./fx";
 import { layoutGraph, layoutHelix, ROW_GAP, timeOf, withinHops } from "./layout";
 import type { GraphPoint, HelixLayout } from "./layout";
-import { drawBackground, drawDust, drawGraph, drawHelix, graphToScreen, helixPos, poolHit } from "./render";
+import { distance, MAX_ZOOM, midpoint, MIN_ZOOM, pinchStep } from "./gesture";
+import type { Pt } from "./gesture";
+import { centreX, drawBackground, drawDust, drawGraph, drawHelix, graphToScreen, helixPos, poolHit } from "./render";
 import type { GraphView } from "./render";
 import { describeProposal, diffLines, expiresLabel, keyFromInput, tokenFromHash } from "./live";
 import { makeResolver, parseBlocks, plainText, slug, stripFrontmatter, wordCount } from "./markdown";
@@ -1405,7 +1407,14 @@ function pick(px: number, py: number): string | null {
   return best;
 }
 
-let drag: { x: number; y: number; moved: boolean } | null = null;
+/** The finger (or mouse) that is panning. A second finger never drives it: that is a pinch. */
+let drag: { id: number; x: number; y: number; moved: boolean } | null = null;
+/** Every finger currently down on the canvas, by pointer id (client coordinates). */
+const pointers = new Map<number, Pt>();
+/** Two fingers down on the graph: a pinch, zooming around the point between them. */
+let pinch: { a: number; b: number; dist: number; mid: Pt } | null = null;
+/** More than one finger has been down since the last time all were up: it must never end as a tap. */
+let multiTouch = false;
 
 /** The rise is a layer, never a gate: any key or click skips it. */
 function skipRise() {
@@ -1417,14 +1426,51 @@ function skipRise() {
 }
 document.addEventListener("keydown", () => { skipRise(); touch(); }, true);
 
+/** The two pinching fingers, in canvas coordinates. */
+function pinchState(a: number, b: number): { mid: Pt; dist: number } | null {
+  const pa = pointers.get(a);
+  const pb = pointers.get(b);
+  if (!pa || !pb) return null;
+  const r = canvas.getBoundingClientRect();
+  const ca = { x: pa.x - r.left, y: pa.y - r.top };
+  const cb = { x: pb.x - r.left, y: pb.y - r.top };
+  return { mid: midpoint(ca, cb), dist: distance(ca, cb) };
+}
+
 canvas.addEventListener("pointerdown", (e) => {
   skipRise();
   touch();
-  drag = { x: e.clientX, y: e.clientY, moved: false };
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   try { canvas.setPointerCapture(e.pointerId); } catch (_) { /* older engines */ }
+  if (pointers.size === 1) {
+    drag = { id: e.pointerId, x: e.clientX, y: e.clientY, moved: false };
+    return;
+  }
+  multiTouch = true;
+  if (pointers.size === 2 && mode === "graph") {
+    // a second finger turns the pan into a pinch
+    const [a, b] = Array.from(pointers.keys());
+    const s = pinchState(a, b);
+    if (s) pinch = { a, b, ...s };
+    drag = null;
+    setHover(null);
+  }
 });
 canvas.addEventListener("pointermove", (e) => {
   const r = canvas.getBoundingClientRect();
+  if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pinch) {
+    const to = pinchState(pinch.a, pinch.b);
+    if (to) {
+      gvTarget = pinchStep(gv, pinch, to, centreX(view), view.h / 2);
+      gv = { ...gvTarget }; // follow the fingers exactly, no easing lag
+      pinch = { ...pinch, ...to };
+    }
+    touch();
+    request();
+    return;
+  }
+  if (drag && e.pointerId !== drag.id) return; // a second finger outside the graph's pinch: ignore it, don't let it jerk the pan
   if (drag) {
     const dx = e.clientX - drag.x;
     const dy = e.clientY - drag.y;
@@ -1440,14 +1486,24 @@ canvas.addEventListener("pointermove", (e) => {
     }
     touch();
     request();
-  } else if (mode !== "emblem") {
+  } else if (mode !== "emblem" && !multiTouch) {
     setHover(pick(e.clientX - r.left, e.clientY - r.top));
   }
 });
+/** A finger lifted or the touch was taken over (a system gesture): drop it from the gesture state. */
+function releasePointer(e: PointerEvent) {
+  pointers.delete(e.pointerId);
+  if (pinch && (e.pointerId === pinch.a || e.pointerId === pinch.b)) pinch = null;
+  if (drag && drag.id === e.pointerId) drag = null;
+  const gesture = multiTouch;
+  if (pointers.size === 0) multiTouch = false;
+  return gesture;
+}
+canvas.addEventListener("pointercancel", (e) => { releasePointer(e); });
 canvas.addEventListener("pointerup", (e) => {
-  const wasDrag = drag && drag.moved;
-  drag = null;
-  if (wasDrag) return;
+  const wasDrag = drag && drag.id === e.pointerId && drag.moved;
+  const gesture = releasePointer(e);
+  if (wasDrag || gesture) return; // a pan, a pinch, or the end of one: never a tap
   if (mode === "emblem") return setMode("helix");
   const r = canvas.getBoundingClientRect();
   const px = e.clientX - r.left;
@@ -1468,7 +1524,7 @@ canvas.addEventListener("wheel", (e) => {
   e.preventDefault();
   touch();
   if (mode === "graph") {
-    const z = Math.max(0.2, Math.min(4, gvTarget.zoom * (e.deltaY < 0 ? 1.12 : 1 / 1.12)));
+    const z = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, gvTarget.zoom * (e.deltaY < 0 ? 1.12 : 1 / 1.12)));
     gvTarget = { ...gvTarget, zoom: z };
   } else {
     scrollTarget = clamp(scrollTarget + e.deltaY * (e.deltaMode === 1 ? 36 : 1));
