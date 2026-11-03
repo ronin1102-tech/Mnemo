@@ -52,6 +52,9 @@ node packages/mnemo-mcp/dist/ctl.js --vault ~/Vault launcher --hub --bind 100.10
 - Stop it: `... --vault ~/Vault stop`. Remove the app and the login entry: `... launcher --remove`.
 - The Mac still needs to be awake and logged in for office machines to reach it.
 
+## Copilot chat (you and one agent, in the Helix)
+A private **Copilot** tab where you talk with one agent (Cori) with the vault in the room. Messages are stored by the hub and picked up when the agent is next active; its replies, and any proposals it attaches, appear in the pane. Chat never writes the vault. Set it up once with `mnemo-ctl chat setup <your person key> <agent key>`, and connect the agent **through the hub with its own agent key** (the chat tools do not exist over stdio). Full details: `docs/copilot-chat.md`.
+
 ## On an office machine: an agent
 Point any MCP client that supports HTTP ("Streamable HTTP") transport at:
 ```

@@ -10,13 +10,15 @@ import { centreX, drawBackground, drawDust, drawGraph, drawHelix, graphToScreen,
 import type { GraphView } from "./render";
 import { describeProposal, diffLines, expiresLabel, keyFromInput, tokenFromHash } from "./live";
 import { makeResolver, parseBlocks, plainText, slug, stripFrontmatter, wordCount } from "./markdown";
+import { agentLabel, hasUnseen, isNearBottom, newestAgentAt, savePath, stateLabel, statusLine, transcriptMarkdown } from "./chat";
 import { isRequestPath, newNoteContent, newNotePath, REQUEST_STATUS_LABEL, REQUESTS_DIR } from "./owner";
 import { renderBlocks } from "./reader";
 import type { ReaderLinks } from "./reader";
-import type { GraphData, NoteNode, PendingProposal, RequestSummary } from "./types";
+import type { ChatList, ChatMessage, ChatProposal, ChatRef, ChatThread, GraphData, NoteNode, PendingProposal, RequestSummary } from "./types";
 
-type Mode = "emblem" | "helix" | "graph" | "read";
-type StageMode = Exclude<Mode, "read">;
+type Mode = "emblem" | "helix" | "graph" | "read" | "copilot";
+/** The views drawn on the canvas. Read and Copilot are full-page panes over it. */
+type StageMode = Exclude<Mode, "read" | "copilot">;
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const canvas = $<HTMLCanvasElement>("stage");
@@ -165,7 +167,7 @@ function touch() {
 /** One frame: advance transitions and easing, draw, and keep looping only while something moves. */
 function frame(ts: number) {
   raf = 0;
-  if (mode === "read") { lastT = 0; return; } // the canvas is hidden behind the reader: draw nothing
+  if (mode === "read" || mode === "copilot") { lastT = 0; return; } // the canvas is hidden behind a full-page pane: draw nothing
   const dt = lastT ? Math.min(64, ts - lastT) : 16;
   lastT = ts;
   const spec = fx();
@@ -250,6 +252,7 @@ function setMode(m: Mode) {
     for (const b of document.querySelectorAll<HTMLButtonElement>(".seg [data-mode]")) b.setAttribute("aria-pressed", String(b.dataset.mode === mode));
     return;
   }
+  if (m !== "read") backToChat = false;
   mode = m;
   hold();
   for (const b of document.querySelectorAll<HTMLButtonElement>(".seg [data-mode]")) b.setAttribute("aria-pressed", String(b.dataset.mode === m));
@@ -257,10 +260,19 @@ function setMode(m: Mode) {
   document.body.setAttribute("data-mode", m);
   hover = null;
   readerEl.hidden = m !== "read";
+  copilotEl.hidden = m !== "copilot";
+  if (m === "copilot") {
+    readerReq++; // drop any note still loading
+    hideDetail();
+    tipEl.hidden = true;
+    $("chat-back-label").textContent = lastStage.charAt(0).toUpperCase() + lastStage.slice(1);
+    openCopilot();
+    return;
+  }
   if (m === "read") {
     hideDetail();
     tipEl.hidden = true;
-    $("reader-back-label").textContent = lastStage.charAt(0).toUpperCase() + lastStage.slice(1);
+    $("reader-back-label").textContent = backToChat ? "Chat" : lastStage.charAt(0).toUpperCase() + lastStage.slice(1);
     if (!draft) openReader(selected);
     updateReaderTools();
     readerScroll.focus();
@@ -328,6 +340,7 @@ function select(path: string | null, reveal = true) {
     }
   }
   if (mode === "read") openReader(path);
+  else if (mode === "copilot") updateChatContext();
   else if (path && mode !== "emblem") showDetail(path);
   else hideDetail();
   request();
@@ -486,6 +499,11 @@ function setData(d: GraphData, label: string) {
   if (mode === "read") updateReaderTools();
   else if (keep && mode !== "emblem" && cardMode === "note") showDetail(keep);
   if (cardMode === "proposals") showProposals();
+  canChat = !!d.canChat;
+  chatOff = d.chatOff ?? null;
+  updateChatTab();
+  if (canChat && (mode === "copilot" || !chatInfo)) refreshChat();
+  else if (mode === "copilot") renderChat();
   scrollTarget = clamp(scrollTarget);
   renderList();
   request();
@@ -517,9 +535,14 @@ function pollLive() {
   const failed = token;
   api("/api/version")
     .then((r) => (r.status === 401 ? null : r.json()))
-    .then((v: { version: number } | null) => {
-      if (v === null) unauthorized(failed);
-      else if (liveDown || v.version !== liveVersion) loadLive();
+    .then((v: { version: number; chat?: string } | null) => {
+      if (v === null) return unauthorized(failed);
+      if (liveDown || v.version !== liveVersion) loadLive();
+      // the hub's chat marker changed (a reply landed, a message was delivered): refresh the pane and badge
+      if (canChat && typeof v.chat === "string" && v.chat !== chatPrint) {
+        chatPrint = v.chat;
+        refreshChat();
+      }
     })
     .catch(() => {
       liveDown = true;
@@ -793,6 +816,10 @@ function applyReaderSize() {
 
 function leaveReader() {
   if (!closeEditor()) return;
+  if (backToChat) {
+    setMode("copilot");
+    return;
+  }
   setMode(lastStage);
   if (lastStage !== "emblem") canvas.focus();
 }
@@ -1256,6 +1283,389 @@ window.addEventListener("beforeunload", (e) => {
   }
 });
 
+// ---- Copilot: a private chat with the agent you connected ---------------------------------
+
+/**
+ * Store-and-forward: a message waits on the hub until the agent next picks up, and replies appear here.
+ * The pane never pretends the agent is live; the status line says when it last picked up. Chat never
+ * writes the vault: anything an agent wants kept arrives as a proposal (gold, with the usual approval),
+ * and "Save" files the conversation as a note under the owner's own key.
+ */
+const copilotEl = $<HTMLElement>("copilot");
+const chatTab = $<HTMLButtonElement>("tab-copilot");
+const chatBadge = $<HTMLElement>("chat-badge");
+const chatScroll = $<HTMLElement>("chat-scroll");
+const chatListEl = $<HTMLElement>("chat-list");
+const chatStatusEl = $<HTMLElement>("chat-status");
+const chatThreadSel = $<HTMLSelectElement>("chat-thread");
+const chatInput = $<HTMLTextAreaElement>("chat-input");
+const chatSendBtn = $<HTMLButtonElement>("chat-send");
+const chatErr = $<HTMLElement>("chat-error");
+const chatJump = $<HTMLButtonElement>("chat-jump");
+const chatOpenBox = $<HTMLInputElement>("chat-open");
+const chatRelatedBox = $<HTMLInputElement>("chat-related");
+const chatSaveBtn = $<HTMLButtonElement>("chat-save");
+const chatDeleteBtn = $<HTMLButtonElement>("chat-delete");
+
+let canChat = false;
+let chatOff: string | null = null;
+let chatInfo: ChatList | null = null;
+/** The conversation on show, or null when composing a new one. */
+let chatThreadId: string | null = null;
+let chatComposingNew = false;
+let chatData: { thread: ChatThread; proposals: Record<string, ChatProposal> } | null = null;
+let chatPrint = "";
+let chatSig = "";
+let chatThreadsSig = "";
+let chatFollowing = true;
+let chatRendered: { id: string | null; count: number } = { id: null, count: 0 };
+let chatSeen = store.get("mnemo.chatSeen");
+let chatReq = 0;
+let chatSending = false;
+let backToChat = false;
+const chatScrollMemo = new Map<string, number>(); // per conversation: scrollTop, or -1 for "at the bottom"
+
+const when = (iso: string) => new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+const coarsePointer = () => !!(window.matchMedia && window.matchMedia("(pointer: coarse)").matches);
+
+function updateChatTab() {
+  chatTab.hidden = !isLive;
+  placeSegIndicator();
+  chatBadge.hidden = !(canChat && chatInfo && mode !== "copilot" && hasUnseen(chatInfo.threads, chatSeen));
+}
+
+/** The owner has now seen everything the agent wrote (this device). */
+function markChatSeen() {
+  if (!chatInfo) return;
+  const newest = newestAgentAt(chatInfo.threads);
+  if (newest && newest !== chatSeen) {
+    chatSeen = newest;
+    store.set("mnemo.chatSeen", newest);
+  }
+}
+
+async function refreshChat() {
+  if (!canChat || !token) return;
+  const id = ++chatReq;
+  try {
+    const failed = token;
+    const r = await api("/api/chat");
+    if (r.status === 401) return unauthorized(failed);
+    if (!r.ok) return;
+    const list = (await r.json()) as ChatList;
+    if (!chatThreadId && !chatComposingNew && mode === "copilot" && list.threads.length) chatThreadId = list.threads[0].id; // pick up where you left off
+    let thread: { thread: ChatThread; proposals: Record<string, ChatProposal> } | null = null;
+    if (mode === "copilot" && chatThreadId) {
+      const tr = await api(`/api/chat/threads/${chatThreadId}`);
+      if (tr.ok) thread = await tr.json();
+      else chatThreadId = null; // deleted elsewhere
+    }
+    if (id !== chatReq) return; // a newer refresh has taken over
+    chatInfo = list;
+    chatData = thread;
+    if (mode === "copilot") markChatSeen();
+    updateChatTab();
+    if (mode === "copilot") renderChat();
+  } catch (_) { /* the page's disconnect notice already says so */ }
+}
+
+function openCopilot() {
+  updateChatContext();
+  renderChat();
+  refreshChat();
+  if (canChat && !coarsePointer()) window.setTimeout(() => chatInput.focus(), 0);
+}
+
+function leaveCopilot() {
+  setMode(lastStage);
+  if (lastStage !== "emblem") canvas.focus();
+}
+
+/** The note the owner could share with the next message: whatever is open in the Helix. */
+function updateChatContext() {
+  const n = selected ? notesByPath.get(selected) : undefined;
+  chatOpenBox.disabled = !n;
+  $("chat-open-label").textContent = n ? `Share the open note: ${n.title}` : "No note open to share";
+}
+
+function openNoteFromChat(path: string) {
+  backToChat = true;
+  select(path, false);
+  setMode("read");
+}
+
+/** Wikilinks and note links inside a chat message open that note in the reader (and Back returns here). */
+const chatLinks: ReaderLinks = {
+  src: "Chat.md",
+  resolve: (t) => resolveLink(t),
+  titleOf: (p) => titles.get(p) || p,
+  open: (p) => openNoteFromChat(p),
+  jump: () => { /* no headings to jump to in a chat message */ },
+};
+
+function chatChips(label: string, refs: ChatRef[] | undefined): HTMLElement | null {
+  if (!refs || !refs.length) return null;
+  const wrap = el("p", "chat-chips", "");
+  wrap.appendChild(el("span", "chat-chips-label", label));
+  for (const r of refs) {
+    const live = notesByPath.has(r.path);
+    const c = el(live ? "button" : "span", "chat-chip" + (r.why === "open" ? " is-open" : ""), r.title);
+    c.title = live ? r.path : `${r.path} (no longer in the vault)`;
+    if (r.why === "open") c.setAttribute("aria-label", `${r.title} (the note that was open)`);
+    if (live) {
+      (c as HTMLButtonElement).type = "button";
+      c.addEventListener("click", () => openNoteFromChat(r.path));
+    }
+    wrap.appendChild(c);
+  }
+  return wrap;
+}
+
+function chatMessageEl(m: ChatMessage, proposals: Record<string, ChatProposal>): HTMLElement {
+  const mine = m.author === "owner";
+  const who = agentLabel(chatInfo ? chatInfo.agent : null);
+  const row = el("article", "chat-msg " + (mine ? "mine" : "theirs"), "");
+  const head = el("p", "chat-head", "");
+  head.appendChild(el("span", "chat-name", mine ? "You" : who));
+  head.appendChild(document.createTextNode(" · " + when(m.at)));
+  row.appendChild(head);
+  const bubble = el("div", "chat-bubble", "");
+  const md = el("div", "md", "");
+  renderBlocks(parseBlocks(m.body), chatLinks, md);
+  bubble.appendChild(md);
+  row.appendChild(bubble);
+  if (mine) {
+    const chips = chatChips("Shared:", m.context);
+    if (chips) row.appendChild(chips);
+    row.appendChild(el("p", "chat-state", stateLabel(m, chatInfo ? chatInfo.agent : null)));
+  } else {
+    const chips = chatChips("Notes used:", m.cites);
+    if (chips) row.appendChild(chips);
+    if (m.proposal) {
+      const p = proposals[m.proposal];
+      if (p && p.status === "pending") row.appendChild(proposalBox(p as unknown as PendingProposal));
+      else {
+        const done = p && p.status !== "missing"
+          ? `${describeProposal({ op: p.op || "change", path: p.path || "", to: p.to, client: p.client || "", exists: p.exists })}: ${p.status}`
+          : "A proposal came with this reply, but it is no longer there.";
+        row.appendChild(el("p", "chat-proposal-done", done));
+      }
+    }
+  }
+  return row;
+}
+
+function scrollChatToBottom() {
+  chatScroll.scrollTop = chatScroll.scrollHeight;
+  chatFollowing = true;
+  chatJump.hidden = true;
+}
+
+function renderChat() {
+  const off = !canChat;
+  copilotEl.classList.toggle("chat-off", off);
+  chatSig = off ? "off" : chatSig;
+  if (off) {
+    chatStatusEl.textContent = "";
+    chatListEl.textContent = "";
+    chatListEl.appendChild(el("p", "chat-empty", chatOff === "read-only"
+      ? "Read-only: Copilot chat is off while Mnemo runs in read-only mode."
+      : "Copilot isn't switched on for this key. It is private to the vault's owner and the one agent they connect."));
+    chatListEl.lastElementChild!.appendChild(el("small", "", "On the vault's computer: mnemo-ctl chat setup <your person key> <agent key>"));
+    chatRendered = { id: null, count: 0 };
+    return;
+  }
+  const info = chatInfo;
+  chatStatusEl.textContent = info ? statusLine(info, Date.now()) : "Opening…";
+  // the conversation picker
+  const threads = info ? info.threads : [];
+  const tsig = threads.map((t) => t.id + t.title + t.updatedAt).join("|") + "|" + chatThreadId;
+  if (tsig !== chatThreadsSig) {
+    chatThreadsSig = tsig;
+    chatThreadSel.innerHTML = "";
+    if (!chatThreadId) {
+      const o = el("option", "", "New conversation") as HTMLOptionElement;
+      o.value = "";
+      chatThreadSel.appendChild(o);
+    }
+    for (const t of threads) {
+      const o = el("option", "", t.title || "Conversation") as HTMLOptionElement;
+      o.value = t.id;
+      chatThreadSel.appendChild(o);
+    }
+    chatThreadSel.value = chatThreadId || "";
+  }
+  chatSaveBtn.disabled = !chatData || !canWrite();
+  chatSaveBtn.title = canWrite() ? "Save this conversation to the vault as a note" : "Saving a note needs a key that can write";
+  chatDeleteBtn.disabled = !chatData;
+  // the messages: redraw only when something changed, and never yank the reader's place
+  const props = chatData ? chatData.proposals : {};
+  const sig = chatData
+    ? chatData.thread.id + "#" + chatData.thread.messages.map((m) => `${m.id}:${m.state || ""}:${m.proposal ? (props[m.proposal] || { status: "?" }).status : ""}`).join(",") + "#" + (info ? info.agent : "")
+    : "empty#" + (info ? info.agent : "");
+  if (sig === chatSig) return;
+  chatSig = sig;
+  const sameThread = chatRendered.id === (chatData ? chatData.thread.id : null);
+  const top = chatScroll.scrollTop;
+  chatListEl.textContent = "";
+  if (!chatData) {
+    const who = agentLabel(info ? info.agent : null);
+    const empty = el("p", "chat-empty", info && info.agent ? `Talk with ${who}, with your vault in the room.` : "Write a message to start a conversation.");
+    empty.appendChild(el("small", "", info && info.agent
+      ? `Your message waits here until ${who} next picks up messages. Chat never writes to your vault: anything ${who} wants kept arrives as a proposal for you to approve.`
+      : "No agent is connected yet; your message will wait until one is."));
+    chatListEl.appendChild(empty);
+    chatRendered = { id: null, count: 0 };
+    return;
+  }
+  for (const m of chatData.thread.messages) chatListEl.appendChild(chatMessageEl(m, props));
+  const count = chatData.thread.messages.length;
+  const id = chatData.thread.id;
+  if (!sameThread) {
+    const memo = chatScrollMemo.get(id);
+    if (memo === undefined || memo < 0) scrollChatToBottom();
+    else {
+      chatScroll.scrollTop = memo;
+      chatFollowing = false;
+    }
+  } else if (chatFollowing) scrollChatToBottom();
+  else {
+    chatScroll.scrollTop = top;
+    if (count > chatRendered.count) chatJump.hidden = false; // something new below: offer it, don't jump
+  }
+  chatRendered = { id, count };
+}
+
+chatScroll.addEventListener("scroll", () => {
+  chatFollowing = isNearBottom(chatScroll.scrollTop, chatScroll.clientHeight, chatScroll.scrollHeight);
+  if (chatFollowing) chatJump.hidden = true;
+  if (chatRendered.id) chatScrollMemo.set(chatRendered.id, chatFollowing ? -1 : chatScroll.scrollTop);
+}, { passive: true } as AddEventListenerOptions);
+chatJump.addEventListener("click", scrollChatToBottom);
+
+function setChatNote(text: string, ok = false, openPath?: string) {
+  chatErr.textContent = text;
+  chatErr.className = "chat-error" + (ok ? " ok" : "");
+  if (openPath) {
+    const b = el("button", "", "Open it") as HTMLButtonElement;
+    b.type = "button";
+    b.addEventListener("click", () => openNoteFromChat(openPath));
+    chatErr.appendChild(b);
+  }
+}
+
+function autosizeChatInput() {
+  chatInput.style.height = "auto";
+  chatInput.style.height = Math.min(chatInput.scrollHeight + 2, 160) + "px";
+}
+chatInput.addEventListener("input", autosizeChatInput);
+chatInput.addEventListener("keydown", (e) => {
+  // a phone's Enter is a new line; a desktop's Enter sends (Shift+Enter is a new line); Ctrl/Cmd+Enter always sends
+  if (e.key !== "Enter" || e.shiftKey || e.isComposing) return;
+  if (e.metaKey || e.ctrlKey || !coarsePointer()) {
+    e.preventDefault();
+    $<HTMLFormElement>("chat-form").requestSubmit ? $<HTMLFormElement>("chat-form").requestSubmit() : chatSendBtn.click();
+  }
+});
+
+$("chat-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const body = chatInput.value.trim();
+  if (!body || chatSending || !canChat) return;
+  chatSending = true;
+  chatSendBtn.disabled = true;
+  setChatNote("");
+  try {
+    const failed = token;
+    const r = await api("/api/chat/messages", "POST", {
+      thread: chatThreadId,
+      body,
+      open: !chatOpenBox.disabled && chatOpenBox.checked ? selected : null,
+      related: chatRelatedBox.checked,
+    });
+    const d = await r.json();
+    if (r.status === 401) {
+      setChatNote("Your key stopped working, so this wasn't sent. Your message is still here; enter a key to continue.");
+      return unauthorized(failed);
+    }
+    if (!r.ok) throw new Error(d.error || r.statusText);
+    chatInput.value = "";
+    autosizeChatInput();
+    chatThreadId = d.thread.id;
+    chatComposingNew = false;
+    chatFollowing = true;
+    chatSig = "";
+    await refreshChat();
+  } catch (err) {
+    setChatNote(`Not sent: ${err instanceof Error ? err.message : err}. Your message is still here.`);
+  } finally {
+    chatSending = false;
+    chatSendBtn.disabled = false;
+  }
+});
+
+$("chat-new").addEventListener("click", () => {
+  chatThreadId = null;
+  chatComposingNew = true;
+  chatData = null;
+  chatSig = "";
+  chatThreadsSig = "";
+  setChatNote("");
+  renderChat();
+  if (!coarsePointer()) chatInput.focus();
+});
+chatThreadSel.addEventListener("change", () => {
+  chatThreadId = chatThreadSel.value || null;
+  chatComposingNew = !chatThreadId;
+  chatData = null;
+  chatSig = "";
+  setChatNote("");
+  refreshChat();
+});
+$("chat-back").addEventListener("click", leaveCopilot);
+$("chat-delete").addEventListener("click", async () => {
+  if (!chatData) return;
+  if (!window.confirm(`Delete "${chatData.thread.title}"? This can't be undone.`)) return;
+  try {
+    const r = await api(`/api/chat/threads/${chatData.thread.id}`, "DELETE");
+    if (!r.ok) throw new Error((await r.json()).error || r.statusText);
+    chatScrollMemo.delete(chatData.thread.id);
+    chatThreadId = null;
+    chatComposingNew = false;
+    chatData = null;
+    chatSig = "";
+    chatThreadsSig = "";
+    await refreshChat();
+  } catch (err) {
+    setChatNote(`Couldn't delete: ${err instanceof Error ? err.message : err}`);
+  }
+});
+/** Save to vault: the conversation as a note, written with the owner's own key through the normal note write. */
+$("chat-save").addEventListener("click", async () => {
+  if (!chatData || !canWrite()) return;
+  const t = chatData.thread;
+  const date = new Date().toISOString().slice(0, 10);
+  const md = transcriptMarkdown(t, { agent: chatInfo ? chatInfo.agent : null, proposals: chatData.proposals, date });
+  chatSaveBtn.disabled = true;
+  try {
+    for (let attempt = 1; attempt <= 8; attempt++) {
+      const p = savePath(t.title, date, attempt);
+      const r = await api("/api/note", "PUT", { path: p, content: md, base: null });
+      const d = await r.json();
+      if (r.status === 409) continue; // that name is taken: try the next
+      if (!r.ok) throw new Error(d.error || r.statusText);
+      await loadLive();
+      setChatNote(`Saved to your vault as ${d.path}.`, true, d.path);
+      return;
+    }
+    throw new Error("couldn't find a free name");
+  } catch (err) {
+    setChatNote(`Not saved: ${err instanceof Error ? err.message : err}`);
+  } finally {
+    chatSaveBtn.disabled = !chatData || !canWrite();
+  }
+});
+
 // ---- strand list (the accessible twin) ----------------------------------------
 
 /**
@@ -1559,6 +1969,9 @@ document.addEventListener("keydown", (e) => {
     e.preventDefault();
     if (draft) cancelEdit();
     else leaveReader();
+  } else if (mode === "copilot") {
+    e.preventDefault();
+    leaveCopilot();
   } else if (document.activeElement !== canvas && selected) select(null);
 });
 canvas.addEventListener("dblclick", (e) => {
@@ -1571,7 +1984,7 @@ canvas.addEventListener("dblclick", (e) => {
   }
 });
 listEl.addEventListener("dblclick", (e) => {
-  if ((e.target as HTMLElement).closest("button[data-index]") && mode !== "read") setMode("read");
+  if ((e.target as HTMLElement).closest("button[data-index]") && mode !== "read" && mode !== "copilot") setMode("read");
 });
 
 for (const b of document.querySelectorAll<HTMLButtonElement>(".seg [data-mode]")) {
@@ -1587,7 +2000,7 @@ window.addEventListener("resize", resize);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) { lastT = 0; hold(); request(); } });
 
 proposalsBtn.addEventListener("click", () => {
-  if (mode === "emblem" || mode === "read") setMode(lastStage === "graph" ? "graph" : "helix");
+  if (mode === "emblem" || mode === "read" || mode === "copilot") setMode(lastStage === "graph" ? "graph" : "helix");
   showProposals();
 });
 
@@ -1606,4 +2019,5 @@ if (isLive) {
 }
 updateFxButton();
 resize();
+updateChatTab();
 setMode("emblem");
