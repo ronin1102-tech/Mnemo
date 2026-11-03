@@ -4,6 +4,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { isAllowedBind, startBridge } from "./bridge.js";
+import { ChatStore } from "./chat.js";
 import { TokenStore } from "./tokens.js";
 import { appleScriptSource, clearRunState, launchAgentPlist, runPid, runningUrl, shq, writeRunState } from "./launcher.js";
 import os from "node:os";
@@ -34,6 +35,9 @@ const USAGE = `mnemo-ctl [--vault <dir>] [--read-only] <command>      (human-onl
                            launcher --remove takes both away.
   token add <name> --agent|--person [--read-only]   Issue a key for one machine or person
   token list | token revoke <name>
+  chat setup <person key> <agent key>   Switch on Copilot chat between the owner (that person key, and the
+                           Helix on this computer) and one agent (that agent key, over the hub). Only those two.
+  chat status              Who is in the chat, what is waiting, and when the agent last picked up
 
 --read-only refuses approve, reject and purge-trash (and removes them from the UI); with token add, issues a read-only key.
 `;
@@ -288,6 +292,37 @@ function main(argv: string[]) {
       }
       out(`To remove: mnemo-ctl --vault ${shq(vault.root)} launcher --remove`);
       return;
+    }
+    case "chat": {
+      const keys = new TokenStore(vault);
+      const chat = new ChatStore(vault);
+      if (arg === "setup") {
+        if (readOnly) throw new VaultError("Refusing chat setup: read-only mode");
+        const [, , ownerName, agentName] = args;
+        if (!ownerName || !agentName) throw new VaultError("Usage: chat setup <person key name> <agent key name>  (see: token list)");
+        const find = (name: string, kind: "person" | "agent") => {
+          const k = keys.list().find((t) => t.name === name);
+          if (!k) throw new VaultError(`No key named ${name}. Create it first: mnemo-ctl token add ${name} --${kind}`);
+          if (k.kind !== kind) throw new VaultError(`${name} is a ${k.kind} key; chat needs a ${kind} key here`);
+          if (k.readOnly) throw new VaultError(`${name} is read-only; chat needs a key that isn't`);
+          return { name: k.name, createdAt: k.createdAt };
+        };
+        chat.setup({ owner: find(ownerName, "person"), agent: find(agentName, "agent") });
+        out(`Copilot chat is on: ${ownerName} (and the Helix on this computer) talk with ${agentName}. No other key can read or post in it.`);
+        out(`The agent must connect through the hub with its own key (MCP URL .../mcp, header Authorization: Bearer <${agentName}'s key>): the chat tools only exist there, not over stdio.`);
+        return;
+      }
+      if (!arg || arg === "status") {
+        const c = chat.config();
+        const st = chat.status();
+        out(`owner:   ${c.owner ? c.owner.name + " (and the Helix on this computer)" : "the Helix on this computer only (no person key set: run chat setup)"}`);
+        out(`agent:   ${c.agent ? c.agent.name : "none yet (run chat setup)"}`);
+        out(`waiting: ${st.queued} message(s) not yet picked up`);
+        out(`last picked up: ${st.lastAgentSeen ?? "never"}`);
+        out(`conversations: ${chat.listThreads().length}`);
+        return;
+      }
+      throw new VaultError("Usage: chat setup <person key> <agent key> | chat status");
     }
     case "token": {
       const keys = new TokenStore(vault);

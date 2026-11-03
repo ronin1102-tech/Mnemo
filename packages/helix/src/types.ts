@@ -55,6 +55,65 @@ export interface GraphData {
   readOnly?: boolean;
   /** Live, on the vault's own computer, not read-only: the owner may write. */
   canWrite?: boolean;
+  /** Live, and this session is the owner's: Copilot chat is available. */
+  canChat?: boolean;
+  /** Why chat is off for this session, if it is. */
+  chatOff?: "read-only" | "not-owner" | null;
   requests?: RequestSummary[];
   version?: number;
+}
+
+/** Copilot chat (the owner's private channel with one agent). Shapes mirror the hub's /api/chat. */
+export interface ChatRef {
+  path: string;
+  title: string;
+  /** `open`: the note the owner had open. `match`: a search hit for the message. */
+  why?: "open" | "match";
+}
+export interface ChatMessage {
+  id: string;
+  author: "owner" | "agent";
+  at: string;
+  body: string;
+  state?: "queued" | "delivered" | "answered";
+  deliveredAt?: string;
+  answeredAt?: string;
+  context?: ChatRef[];
+  cites?: ChatRef[];
+  proposal?: string;
+}
+export interface ChatThread {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  messages: ChatMessage[];
+}
+export interface ChatThreadSummary {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  count: number;
+  queued: number;
+  lastAgentAt: string | null;
+}
+export interface ChatList {
+  /** Name of the agent the owner connected, or null if none yet. */
+  agent: string | null;
+  lastAgentSeen: string | null;
+  queued: number;
+  threads: ChatThreadSummary[];
+}
+/** A proposal attached to a reply, as the hub resolves it for the pane. */
+export interface ChatProposal {
+  id: string;
+  status: string;
+  op?: string;
+  path?: string;
+  to?: string;
+  client?: string;
+  createdAt?: string;
+  expiresAt?: string;
+  exists?: boolean;
 }

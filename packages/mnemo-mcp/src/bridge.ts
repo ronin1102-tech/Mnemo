@@ -4,6 +4,7 @@ import http from "node:http";
 import net from "node:net";
 import path from "node:path";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { buildContext, ChatStore, MAX_BODY_CHARS } from "./chat.js";
 import { graphPayload } from "./graph.js";
 import { Index } from "./indexer.js";
 import { makeLogger } from "./log.js";
@@ -26,6 +27,11 @@ import { Vault, VaultError } from "./vault.js";
  *     each MCP session is pinned to the key that opened it; proposals record the key's name;
  *   - read-only keys (and --read-only) get no write tools and no approve/reject.
  * Approve/reject call the same ProposalStore as mnemo-ctl, so what lands is identical.
+ *
+ * Copilot chat (/api/chat/...): the owner's private channel with one agent. Only the owner may use it:
+ * the local session, or the one person key the human named with `mnemo-ctl chat setup`. Chat lives in
+ * Mnemo's own data folder, not the vault. The agent's side is two MCP tools (chat_fetch, chat_post)
+ * given only to hub sessions, and only the agent key the human named may call them.
  *
  * Owner writes (PUT /api/note): the owner's own notes and requests are not proposals; they land
  * directly, through the same atomic writer. Who may write: the local session key (over loopback),
@@ -115,6 +121,7 @@ export async function startBridge(vault: Vault, opts: BridgeOptions) {
   const keys = new TokenStore(vault);
   const index = new Index(vault);
   const store = new ProposalStore(vault);
+  const chat = new ChatStore(vault);
   const log = makeLogger(vault);
   let version = 1;
   let proposalPrint = "";
@@ -206,7 +213,7 @@ export async function startBridge(vault: Vault, opts: BridgeOptions) {
       } catch {
         return send(400, { error: "invalid JSON" });
       }
-      const { server, close } = createMcpServer(vault, { readOnly: key.readOnly || !!opts.readOnly, clientName: key.name });
+      const { server, close } = createMcpServer(vault, { readOnly: key.readOnly || !!opts.readOnly, clientName: key.name, chat: { name: key.name, createdAt: key.createdAt } });
       const transport: StreamableHTTPServerTransport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => crypto.randomUUID(),
         maxRequestBodySize: MAX_BODY,
@@ -237,12 +244,61 @@ export async function startBridge(vault: Vault, opts: BridgeOptions) {
     const readOnly = !!opts.readOnly || !!(person && person.readOnly);
     const by: SettledBy = person ? { actor: "helix", user: person.name } : store.human("helix");
     const canWrite = !readOnly && (person !== null || (local && isLoopback(req.socket.remoteAddress)));
+    // chat is the owner's alone: this computer's session, or the one person key named for it; nobody in --read-only mode
+    const chatOwner = !opts.readOnly && (person !== null ? !person.readOnly && chat.isOwnerKey({ name: person.name, createdAt: person.createdAt }) : local && isLoopback(req.socket.remoteAddress));
 
     try {
-      if (req.method === "GET" && url.pathname === "/api/version") return send(200, { version: refresh() });
+      if (req.method === "GET" && url.pathname === "/api/version") return send(200, { version: refresh(), chat: chatOwner ? chat.fingerprint() : "" });
       if (req.method === "GET" && url.pathname === "/api/graph") {
         refresh();
-        return send(200, { ...graphPayload(vault, index, store), live: true, readOnly, canWrite, version, viewer: person ? person.name : "this computer" });
+        return send(200, { ...graphPayload(vault, index, store), live: true, readOnly, canWrite, canChat: chatOwner, chatOff: opts.readOnly ? "read-only" : chatOwner ? null : "not-owner", version, viewer: person ? person.name : "this computer" });
+      }
+      // ---- Copilot chat: the owner's private channel with one agent ----
+      if (url.pathname === "/api/chat" || url.pathname.startsWith("/api/chat/")) {
+        if (!chatOwner) return send(403, { error: opts.readOnly ? "Read-only: chat is off" : "Copilot chat isn't switched on for this key" });
+        const cm = url.pathname.match(/^\/api\/chat(?:\/(threads|messages)(?:\/([0-9a-f-]+))?)?$/);
+        if (!cm) return send(404, { error: "not found" });
+        const [, part, tid] = cm;
+        if (!part && req.method === "GET") {
+          const cfg = chat.config();
+          return send(200, { agent: cfg.agent ? cfg.agent.name : null, lastAgentSeen: cfg.lastAgentSeen, queued: chat.status().queued, threads: chat.listThreads() });
+        }
+        if (part === "threads" && tid && req.method === "GET") {
+          const t = chat.getThread(tid);
+          const proposals: Record<string, unknown> = {};
+          for (const msg of t.messages) {
+            if (!msg.proposal || proposals[msg.proposal]) continue;
+            try {
+              const p = store.get(msg.proposal);
+              proposals[p.id] = { id: p.id, status: p.status, op: p.op, path: p.path, to: p.to, client: p.client, createdAt: p.createdAt, expiresAt: p.expiresAt, exists: vault.exists(p.path) };
+            } catch {
+              proposals[msg.proposal] = { id: msg.proposal, status: "missing" };
+            }
+          }
+          return send(200, { thread: t, proposals });
+        }
+        if (part === "threads" && tid && req.method === "DELETE") {
+          chat.deleteThread(tid);
+          log("chat", { event: "owner-delete-thread", thread: tid, by });
+          return send(200, { deleted: tid });
+        }
+        if (part === "messages" && !tid && req.method === "POST") {
+          const raw = await readBody(req, 4 * MAX_BODY_CHARS);
+          if (raw === null) return send(413, { error: "message too large" });
+          let b: { thread?: unknown; body?: unknown; open?: unknown; related?: unknown };
+          try {
+            b = JSON.parse(raw.toString("utf8"));
+          } catch {
+            return send(400, { error: "invalid JSON" });
+          }
+          if (typeof b.body !== "string" || !(b.thread == null || typeof b.thread === "string") || !(b.open == null || typeof b.open === "string")) return send(400, { error: "expected { thread, body, open, related }" });
+          index.sync();
+          const context = buildContext(vault, index, b.body, { open: b.open as string | null | undefined, related: b.related !== false });
+          const r = chat.send((b.thread as string | null | undefined) || null, b.body, context);
+          log("chat", { event: "owner-message", thread: r.thread.id, id: r.message.id, context: context.length, by });
+          return send(200, r);
+        }
+        return send(404, { error: "not found" });
       }
       // the full text of one note, for the Helix reader (the same jail as every agent path: .md only, never .mnemo/)
       if (req.method === "GET" && url.pathname === "/api/note") {

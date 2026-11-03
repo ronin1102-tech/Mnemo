@@ -9,6 +9,10 @@ interface KnownNote {
   mtime: number;
   size: number;
 }
+const STOP_WORDS = new Set(
+  "the and for with that this from have you your are was were what when where which who why how can could would should will not but all any our out one get got has had its into just like some than then them they their there these those about also been being does did done more most much only other over such very want need please tell give make let its here ask can't don't".split(" "),
+);
+
 export interface NoteMeta {
   path: string;
   title: string;
@@ -153,6 +157,24 @@ export class Index {
       )
       .all(...args, limit) as any[];
     return rows.map((r) => ({ ...this.meta(r), snippet: r.snippet }));
+  }
+
+  /**
+   * Notes matching ANY of the significant words in `text`, best first. Unlike `search` (every word must
+   * match), this suits a whole sentence: it is how chat finds notes related to what was just written.
+   */
+  related(text: string, limit = 3): NoteMeta[] {
+    const words = [...new Set((text.toLowerCase().match(/[\p{L}\p{N}_]{3,}/gu) ?? []).filter((w) => !STOP_WORDS.has(w)))]
+      .sort((a, b) => b.length - a.length)
+      .slice(0, 8);
+    if (!words.length) return [];
+    const rows = this.db
+      .prepare(
+        `SELECT n.* FROM notes_fts JOIN notes n ON n.id = notes_fts.rowid
+         WHERE notes_fts MATCH ? ORDER BY bm25(notes_fts, 5.0, 3.0, 1.0) LIMIT ?`,
+      )
+      .all(words.map((w) => `"${w}"`).join(" OR "), limit) as any[];
+    return rows.map((r) => this.meta(r));
   }
 
   recent(limit = 10): NoteMeta[] {
